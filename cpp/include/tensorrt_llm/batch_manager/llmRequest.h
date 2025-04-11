@@ -1015,9 +1015,14 @@ public:
 
     void setPrepopulatedPromptLen(SizeType32 prepopulatedPromptLen, SizeType32 kvTokensPerBlock)
     {
-        TLLM_LOG_DEBUG("Setting pre-populated prompt length for request %lu to %i.", mRequestId, prepopulatedPromptLen);
+        TLLM_LOG_DEBUG("Setting pre-populated prompt length for request %lu to %i (promptLen=%i).", 
+                       mRequestId, prepopulatedPromptLen, getPromptLen());
 
         auto const promptLen = getPromptLen();
+        if (prepopulatedPromptLen >= promptLen) {
+            TLLM_LOG_ERROR("Invalid state: prepopulatedPromptLen (%d) >= promptLen (%d) for request %lu", 
+                           prepopulatedPromptLen, promptLen, mRequestId);
+        }
         TLLM_CHECK(prepopulatedPromptLen < promptLen);
         mPrepopulatedPromptLen = prepopulatedPromptLen;
 
