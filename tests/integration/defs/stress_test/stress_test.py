@@ -947,8 +947,8 @@ def extract_stress_test_metrics(artifacts_dir="./artifacts",
     print(metrics_df.to_string(index=False))
 
     # Define the high performance threshold
-    throughput_threshold = 0.5  # value range [0,1], 0.95 maybe too high, suggest use 0.5
-    concurrency_no_gain_count_threshold = 5  # change this value per different model and throughput threshold
+    throughput_threshold = 0.9  # value range [0,1], 0.95 maybe too high, suggest use 0.5
+    concurrency_no_gain_count_threshold = 3  # change this value per different model and throughput threshold
     high_perf_results = {}
 
     # Calculate normalized throughput for each model
