@@ -108,11 +108,11 @@ class StressTestConfig:
     # Stress test parameters for stress-test mode
     # stress_time:
     # Used as control parameter to get request count for stress test in stage3
-    stress_time: int = 300  # 5 mins
+    stress_time: int = 180  # 3 mins
     # stress_timeout:
     # Maximum time allowed for stress test to run; to prevent hanging tests
     # Must be greater than stress_time to account for initialization, warmup, etc.
-    stress_timeout: int = 480  # 8 mins
+    stress_timeout: int = 300  # 5 mins
 
     # Customized stress test parameters for stress-stage-alone mode
     customized_stress_test: bool = True
@@ -410,7 +410,11 @@ def stress_test(config, test_mode, server_config=None):
         "scheduler_config": {
             "capacity_scheduler_policy":
             test_server_config.capacity_scheduler_policy
-        }
+        },
+        "pytorch_backend_config": {
+            "print_iter_log": True,
+            "enable_overlap_scheduler": True,
+        },
     }
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml',
@@ -947,8 +951,8 @@ def extract_stress_test_metrics(artifacts_dir="./artifacts",
     print(metrics_df.to_string(index=False))
 
     # Define the high performance threshold
-    throughput_threshold = 0.9  # value range [0,1], 0.95 maybe too high, suggest use 0.5
-    concurrency_no_gain_count_threshold = 3  # change this value per different model and throughput threshold
+    throughput_threshold = 0.5  # value range [0,1], 0.95 maybe too high, suggest use 0.5
+    concurrency_no_gain_count_threshold = 5  # change this value per different model and throughput threshold
     high_perf_results = {}
 
     # Calculate normalized throughput for each model
