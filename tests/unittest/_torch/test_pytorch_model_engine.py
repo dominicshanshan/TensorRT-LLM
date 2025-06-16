@@ -1,7 +1,6 @@
 import unittest
 from dataclasses import dataclass
 
-import pytest
 import torch
 
 import tensorrt_llm
@@ -128,7 +127,7 @@ def create_model_engine_and_kvcache(config: PyTorchConfig = None):
     return model_engine, kv_cache_manager
 
 
-@pytest.mark.skip(reason="https://nvbugs/5324248")
+# @pytest.mark.skip(reason="https://nvbugs/5324248")
 class PyTorchModelEngineTestCase(unittest.TestCase):
 
     def test_pad_generation_requests(self) -> None:
