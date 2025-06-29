@@ -294,6 +294,7 @@ class OpenAIServer:
                 sampling_params=sampling_params,
                 _postproc_params=postproc_params if self.postproc_worker_enabled else None,
                 streaming=request.stream,
+                lora_request=request.lora_request,
                 disaggregated_params=disaggregated_params
             )
             asyncio.create_task(self.await_disconnected(raw_request, promise))
@@ -415,6 +416,7 @@ class OpenAIServer:
                     sampling_params=sampling_params,
                     _postproc_params=postproc_params,
                     streaming=request.stream,
+                    lora_request=request.lora_request,
                     disaggregated_params=disaggregated_params
                 )
                 asyncio.create_task(self.await_disconnected(raw_request, promise))
