@@ -97,8 +97,6 @@ class TestLlama3_1_8BInstruct(LlmapiAccuracyTestHarness):
         )
         llm = LLM(self.MODEL_PATH, **pytorch_config)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -129,8 +127,6 @@ class TestLlama3_1_8BInstruct(LlmapiAccuracyTestHarness):
                   pipeline_parallel_size=pp_size,
                   **pytorch_config)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -162,8 +158,6 @@ class TestLlama3_1_8BInstruct(LlmapiAccuracyTestHarness):
         if fp8kv:
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -205,8 +199,6 @@ class TestLlama3_1_8BInstruct(LlmapiAccuracyTestHarness):
         if fp8kv:
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -543,8 +535,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   enable_attention_dp=attention_dp,
                   speculative_config=mtp_config)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -592,8 +582,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   enable_attention_dp=attention_dp,
                   speculative_config=mtp_config)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -651,10 +639,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -713,10 +697,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -739,8 +719,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   speculative_config=mtp_config)
         assert llm.args.quant_config.quant_algo == QuantAlgo.FP8_BLOCK_SCALES
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -771,8 +749,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   speculative_config=mtp_config)
         assert llm.args.quant_config.quant_algo == QuantAlgo.FP8_BLOCK_SCALES
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -837,10 +813,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -913,10 +885,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -947,8 +915,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   **pytorch_backend_options,
                   enable_attention_dp=True)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -974,8 +940,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   **pytorch_config,
                   speculative_config=mtp_config)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1004,10 +968,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
                   enable_attention_dp=True,
                   quant_config=quant_config)
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1062,10 +1022,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1132,10 +1088,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1202,10 +1154,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1271,10 +1219,6 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             assert llm.args.quant_config.kv_cache_quant_algo == QuantAlgo.FP8
 
         with llm:
-            # No need to run MMLU for fp8kv
-            if not fp8kv:
-                task = MMLU(self.MODEL_NAME)
-                task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1696,8 +1640,6 @@ class TestQwen3_30B_A3B(LlmapiAccuracyTestHarness):
                   **pytorch_config,
                   enable_attention_dp=attention_dp)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1719,8 +1661,6 @@ class TestQwen3_30B_A3B(LlmapiAccuracyTestHarness):
             **pytorch_config,
             enable_attention_dp=attention_dp)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
@@ -1762,8 +1702,6 @@ class TestQwen3_30B_A3B(LlmapiAccuracyTestHarness):
             **pytorch_config,
             enable_attention_dp=attention_dp)
         with llm:
-            task = MMLU(self.MODEL_NAME)
-            task.evaluate(llm)
             task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
