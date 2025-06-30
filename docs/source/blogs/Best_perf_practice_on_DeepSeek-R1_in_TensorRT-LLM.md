@@ -30,7 +30,7 @@ In this blog, we share the configurations and procedures about how to reproduce 
       - [Expected Result Format](#expected-result-format-3)
   - [Exploring more ISL/OSL combinations](#exploring-more-islosl-combinations)
     - [WIP: Enable more features by default](#wip-enable-more-features-by-default)
-    - [WIP: Chunked context support on DeepSeek models](#wip-chunked-context-support-on-deepseek-models)
+    - [Not supported: MLA chunked context support on Hopper](#not-supported-mla-chunked-context-support-on-hopper)
     - [Out of memory issues](#out-of-memory-issues)
 
 
@@ -419,9 +419,9 @@ Generally, you should make sure that `max_batch_size` is not too low to bottlene
 
 For more details on `max_batch_size` and `max_num_tokens`, refer to [Tuning Max Batch Size and Max Num Tokens](../performance/performance-tuning-guide/tuning-max-batch-size-and-max-num-tokens.md).
 
-### WIP: Chunked context support on DeepSeek models
+### Not supported: MLA chunked context support on Hopper
 
-TensorRT-LLM team is actively working on chunked context support for DeepSeek models. Because of that missing feature, there is currently a limitation that `max_num_tokens` has to be at least larger than the max input sequence length of the samples in dataset.
+MLA chunked context support has been added on Blackwell GPUs, while it's not supported on Hopper yet. On Hopper, note that `max_num_tokens` has to be at least larger than the max input sequence length of the samples in dataset.
 For more details on `max_num_tokens`, refer to [Tuning Max Batch Size and Max Num Tokens](../performance/performance-tuning-guide/tuning-max-batch-size-and-max-num-tokens.md).
 
 ### Out of memory issues
