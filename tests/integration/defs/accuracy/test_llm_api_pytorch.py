@@ -72,6 +72,7 @@ class TestLlama3_1_8B(LlmapiAccuracyTestHarness):
             task.evaluate(llm, streaming=True)
 
 
+@skip_post_blackwell  # TODO: remove this skip after this nvbug is fixed: https://nvbugspro.nvidia.com/bug/5295470
 class TestLlama3_1_8BInstruct(LlmapiAccuracyTestHarness):
     MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
     MODEL_PATH = f"{llm_models_root()}/llama-3.1-model/Llama-3.1-8B-Instruct"
@@ -451,6 +452,9 @@ class TestGemma3_1BInstruct(LlmapiAccuracyTestHarness):
     MODEL_NAME = "google/gemma-3-1b-it"
     MODEL_PATH = f"{llm_models_root()}/gemma/gemma-3-1b-it/"
 
+    # NOTE: Disable block reuse for SWA window model.
+    kv_cache_config = KvCacheConfig(enable_block_reuse=False)
+
     def test_auto_dtype(self):
         # Disabling kv cache reuse as a WAR to deal with gaps in kernel support for Gemma3's non-inclusive sliding window size.
         kv_cache_config = KvCacheConfig(
@@ -459,6 +463,29 @@ class TestGemma3_1BInstruct(LlmapiAccuracyTestHarness):
         )
         with LLM(self.MODEL_PATH, kv_cache_config=kv_cache_config) as llm:
             task = CnnDailymail(self.MODEL_NAME)
+            task.evaluate(llm)
+            task = GSM8K(self.MODEL_NAME)
+            task.evaluate(llm)
+
+    def test_auto_dtype_vswa(self):
+        # NOTE: Test with VSWA kv cache config.
+        self.kv_cache_config.max_attention_window = [
+            512, 512, 512, 512, 512, 32768
+        ]  # Gemma3 1B attention window size pattern
+
+        with LLM(self.MODEL_PATH, kv_cache_config=self.kv_cache_config) as llm:
+            task = GSM8K(self.MODEL_NAME)
+            task.evaluate(llm)
+
+        # chunked prefill case or more features
+        extra_llm_config = dict(
+            enable_chunked_prefill=True,
+            max_num_tokens=1024,
+        )
+        with LLM(self.MODEL_PATH,
+                 kv_cache_config=self.kv_cache_config,
+                 **extra_llm_config) as llm:
+            task = GSM8K(self.MODEL_NAME)
             task.evaluate(llm)
 
 
