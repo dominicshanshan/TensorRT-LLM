@@ -33,12 +33,12 @@ def test_tinyllama_logits_processor_2gpu(tp_size: int, pp_size: int):
 
 
 @pytest.mark.gpu2
-def test_llama_v2_13b_lora_tp2():
-    llama_v2_13b_lora_test_harness(tensor_parallel_size=2,
-                                   kv_cache_config=global_kv_cache_config)
+def test_llama_7b_lora_tp2():
+    llama_7b_lora_from_dir_test_harness(tensor_parallel_size=2,
+                                        kv_cache_config=global_kv_cache_config)
 
 
 @pytest.mark.gpu2
 def test_llama_7b_multi_lora_tp2():
-    llama_7b_multi_lora_test_harness(tensor_parallel_size=2,
-                                     kv_cache_config=global_kv_cache_config)
+    llama_7b_multi_lora_from_request_test_harness(
+        tensor_parallel_size=2, kv_cache_config=global_kv_cache_config)
