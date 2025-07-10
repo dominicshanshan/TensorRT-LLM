@@ -584,11 +584,6 @@ def nemotron_example_root(llm_root, llm_venv):
     "Get nemotron example root"
     example_root = os.path.join(llm_root, "examples", "models", "core",
                                 "nemotron")
-    llm_venv.run_cmd([
-        "-m", "pip", "install", "-r",
-        os.path.join(example_root, "requirements.txt")
-    ])
-
     # Install Apex for NeMo support
     print("Installing NVIDIA Apex for NeMo support...")
 
@@ -637,7 +632,7 @@ def nemotron_example_root(llm_root, llm_venv):
 
     # Set NVCC threads for parallel compilation
     env = os.environ.copy()
-    env["NVCC_APPEND_FLAGS"] = "--threads 4"
+    env["NVCC_APPEND_FLAGS"] = "--threads 8"
 
     try:
         llm_venv.run_cmd(apex_install_cmd, env=env)
