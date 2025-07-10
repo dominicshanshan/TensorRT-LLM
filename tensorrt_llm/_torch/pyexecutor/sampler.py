@@ -304,7 +304,7 @@ class TorchSampler(Sampler):
             request.py_result.append_log_probs([token_log_probs])
 
         if hasattr(scheduled_requests, 'chunked_requests'):
-            request_idx += len(scheduled_requests.chunked_requests)
+            len(scheduled_requests.chunked_requests)
             token_idx += len(scheduled_requests.chunked_requests)
 
         for request in scheduled_requests.context_requests:

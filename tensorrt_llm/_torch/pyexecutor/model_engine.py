@@ -1292,7 +1292,6 @@ class PyTorchModelEngine(ModelEngine):
                 request_ids.append(request.py_request_id)
                 # update batch index
                 request.py_batch_idx = batch_idx
-                batch_idx += 1
             else:
                 # update batch index
                 previous_batch_idx = request.py_batch_idx

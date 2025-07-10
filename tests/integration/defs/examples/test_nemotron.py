@@ -31,7 +31,7 @@ def test_llm_nemotron_3_8b_1gpu(nemotron_example_root,
     ckpt_dir = f"{cmodel_dir}/{model_name}/{qformat}/1-gpu"
 
     quantize_cmd = [
-        f"{nemotron_example_root}/../quantization/quantize.py",
+        f"{nemotron_example_root}/../../../quantization/quantize.py",
         f"--nemo_ckpt_path={llm_nemotron_3_8b_model_root}",
         f"--calib_dataset={llm_datasets_root}/cnn_dailymail",
         "--batch_size=64",
@@ -56,7 +56,7 @@ def test_llm_nemotron_3_8b_1gpu(nemotron_example_root,
 
     print("Run engines...")
     summary_cmd = [
-        f"{nemotron_example_root}/../summarize.py", "--test_trt_llm",
+        f"{nemotron_example_root}/../../../summarize.py", "--test_trt_llm",
         f"--engine_dir={engine_dir}",
         f"--vocab_file={ckpt_dir}/tokenizer.model", "--no_add_special_tokens",
         "--batch_size=8", "--max_ite=40", "--check_accuracy",

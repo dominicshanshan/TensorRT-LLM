@@ -588,6 +588,109 @@ def nemotron_example_root(llm_root, llm_venv):
         "-m", "pip", "install", "-r",
         os.path.join(example_root, "requirements.txt")
     ])
+
+    # Install Apex for NeMo support
+    print("Installing NVIDIA Apex for NeMo support...")
+
+    # Clone Apex repository first
+    apex_dir = os.path.join(llm_venv.get_working_directory(), "apex")
+    if os.path.exists(apex_dir):
+        shutil.rmtree(apex_dir)
+
+    print(f"Cloning Apex repository to {apex_dir}...")
+    # Use subprocess directly for git clone since it's a system command
+    sp.run(["git", "clone", "https://github.com/NVIDIA/apex", apex_dir],
+           check=True)
+
+    # Create a dedicated directory for Apex installation
+    apex_install_dir = os.path.join(llm_venv.get_working_directory(),
+                                    "apex_install")
+    os.makedirs(apex_install_dir, exist_ok=True)
+
+    # Prepare pip install command with target directory
+    apex_install_cmd = [
+        "-m", "pip", "install", "-v", "--disable-pip-version-check",
+        "--no-cache-dir", "--no-build-isolation", "--force-reinstall",
+        "--target", apex_install_dir
+    ]
+
+    # Check pip version to use appropriate config settings format
+    result = sp.run([llm_venv._venv_bin, "-m", "pip", "--version"],
+                    capture_output=True,
+                    text=True)
+    pip_version = result.stdout.split()[1]
+    major, minor = map(int, pip_version.split('.')[:2])
+
+    if major > 23 or (major == 23 and minor >= 1):
+        # pip >= 23.1 supports multiple --config-settings
+        apex_install_cmd.extend([
+            "--config-settings", "--build-option=--cpp_ext",
+            "--config-settings", "--build-option=--cuda_ext"
+        ])
+    else:
+        # Use legacy --global-option for older pip
+        apex_install_cmd.extend(
+            ["--global-option=--cpp_ext", "--global-option=--cuda_ext"])
+
+    # Add the local apex directory
+    apex_install_cmd.append(apex_dir)
+
+    # Set NVCC threads for parallel compilation
+    env = os.environ.copy()
+    env["NVCC_APPEND_FLAGS"] = "--threads 4"
+
+    try:
+        llm_venv.run_cmd(apex_install_cmd, env=env)
+        print("Successfully installed NVIDIA Apex")
+
+        # Verify Apex installation was successful
+        print("Successfully installed NVIDIA Apex")
+
+    except Exception as e:
+        print(f"Warning: Failed to install Apex with CUDA extensions: {e}")
+        print("Falling back to Python-only installation...")
+        # Fallback to Python-only installation
+        llm_venv.run_cmd([
+            "-m", "pip", "install", "-v", "--disable-pip-version-check",
+            "--no-cache-dir", "--no-build-isolation", apex_dir
+        ])
+
+    # Clean up the cloned repository
+    shutil.rmtree(apex_dir)
+
+    # Add the apex installation directory to PYTHONPATH
+    current_pythonpath = os.environ.get('PYTHONPATH', '')
+    if apex_install_dir not in current_pythonpath:
+        new_pythonpath = f"{apex_install_dir}:{current_pythonpath}" if current_pythonpath else apex_install_dir
+        os.environ['PYTHONPATH'] = new_pythonpath
+        # Update the virtual environment's PYTHONPATH
+        llm_venv._new_env['PYTHONPATH'] = new_pythonpath
+        if hasattr(llm_venv, '_env'):
+            llm_venv._env['PYTHONPATH'] = new_pythonpath
+        print(f"Added {apex_install_dir} to PYTHONPATH")
+
+    # Verify Apex is accessible in subprocess with the updated PYTHONPATH
+    try:
+        verify_cmd = [
+            llm_venv._venv_bin, "-c",
+            "import apex; print(f'Apex accessible at: {apex.__file__}')"
+        ]
+        verify_env = os.environ.copy()
+        verify_env['PYTHONPATH'] = new_pythonpath
+        verify_result = sp.run(verify_cmd,
+                               capture_output=True,
+                               text=True,
+                               env=verify_env)
+        if verify_result.returncode == 0:
+            print(
+                f"Apex verified in subprocess: {verify_result.stdout.strip()}")
+        else:
+            print(
+                f"Warning: Apex not accessible in subprocess: {verify_result.stderr}"
+            )
+    except Exception as e:
+        print(f"Failed to verify Apex in subprocess: {e}")
+
     return example_root
 
 

@@ -109,11 +109,10 @@ class PythonVenvRunnerImpl(PythonRunnerInterface):
             os.makedirs(self.workspace, exist_ok=True)
 
         call_args = [self._venv_bin] + args
+        # Use self._new_env as the base environment to ensure PYTHONPATH is included
+        new_env = copy.deepcopy(self._new_env)
         if env:
-            new_env = copy.deepcopy(os.environ)
             new_env.update(env)
-        else:
-            new_env = os.environ
 
         if caller.__name__ == 'check_output':
             result = subprocess.run(call_args,
