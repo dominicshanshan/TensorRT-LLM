@@ -282,7 +282,7 @@ class MTPSampler(TorchSampler):
 
         state.sampler_event.synchronize()
         new_tokens = state.host.new_tokens
-        new_tokens_lens = state.host.new_tokens_lens
+        state.host.new_tokens_lens
         next_draft_tokens_list = state.host.next_draft_tokens.tolist()
         beam_idx = self.BEAM
         for req in state.scheduled_requests.context_requests:
@@ -314,7 +314,6 @@ class MTPSampler(TorchSampler):
                 request.py_draft_tokens = next_draft_tokens_list[idx]
                 request.py_rewind_len = self.draft_len - (num_new_tokens - 1)
                 request.py_decoding_iter += 1
-            idx += 1
 
     def sample_async(self, scheduled_requests: ScheduledRequests,
                      outputs: dict[str, torch.Tensor]) -> SampleStateMTP:
