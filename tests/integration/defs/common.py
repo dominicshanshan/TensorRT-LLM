@@ -413,7 +413,7 @@ def convert_weights(llm_venv,
         model_path = os.path.join(os.path.dirname(os.path.dirname(model_path)),
                                   'nemotron', 'Nemotron-4-15B-SteerLM.nemo')
         convert_cmd = [
-            f"{example_root}/../quantization/quantize.py",
+            f"{example_root}/../../../quantization/quantize.py",
             f"--nemo_ckpt_path={model_path}",
             "--batch_size=64",
             f"--dtype={data_type}",
