@@ -105,6 +105,24 @@ def get_model_yaml_config(model_label: str,
                 }
             }
         },
+        # Deepseek_v3_lite_fp8_cases
+        {
+            'patterns': [
+                'deepseek_v3_lite_fp8-bench-pytorch-float8-input_output_len:128,128',
+                'deepseek_v3_lite_fp8-bench-pytorch-float8-input_output_len:2000,500',
+                'deepseek_v3_lite_fp8-bench-pytorch-float8-input_output_len:500,2000',
+            ],
+            'config': {
+                'cuda_graph_config': {
+                    'enable_padding':
+                    True,
+                    'batch_sizes': [
+                        1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
+                        104, 112, 120, 128
+                    ]
+                }
+            }
+        },
         # Deepseek default cases
         {
             'patterns': 'deepseek_r1',
