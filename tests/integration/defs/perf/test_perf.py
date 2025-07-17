@@ -1252,6 +1252,13 @@ class MultiMetricPerfTest(AbstractPerfScriptTestClass):
             benchmark_cmd += [
                 f"--extra_llm_api_options=extra-llm-api-config.yml"
             ]
+        # Add iteration logging for CUDA graph analysis
+        iteration_log_dir = "/scratch_gpu/fork/TensorRT-LLM/trtllm_bench_iteration_log"
+        if not os.path.exists(iteration_log_dir):
+            os.makedirs(iteration_log_dir, exist_ok=True)
+        benchmark_cmd += [
+            f"--iteration_log={iteration_log_dir}/cuda_graph_disable_bs_1_input_output_len_128_128.log"
+        ]
         return benchmark_cmd
 
     def get_gpt_manager_runtime_benchmark_command(self, engine_dir, bs,
