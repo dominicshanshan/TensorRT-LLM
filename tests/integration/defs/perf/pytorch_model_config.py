@@ -108,18 +108,13 @@ def get_model_yaml_config(model_label: str,
         # Deepseek_v3_lite_fp8_cases
         {
             'patterns': [
-                'deepseek_v3_lite_fp8-bench-pytorch-float8-input_output_len:128,128',
-                'deepseek_v3_lite_fp8-bench-pytorch-float8-input_output_len:2000,500',
-                'deepseek_v3_lite_fp8-bench-pytorch-float8-input_output_len:500,2000',
+                'deepseek_v3_lite_fp8-bench-pytorch-float8',
             ],
             'config': {
+                'print_iter_log': False,
                 'cuda_graph_config': {
-                    'enable_padding':
-                    True,
-                    'batch_sizes': [
-                        1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
-                        104, 112, 120, 128
-                    ]
+                    'enable_padding': False,
+                    'batch_sizes': [1]
                 }
             }
         },
@@ -190,14 +185,20 @@ def get_model_yaml_config(model_label: str,
     ]
 
     # Apply pattern-based configurations on top of base config
+    print(f"[DEBUG] Model label: {model_label}")
     for pattern_config in pattern_configs:
         patterns = pattern_config['patterns']
         if isinstance(patterns, str):
             patterns = [patterns]
         for pattern in patterns:
             if pattern in model_label.lower():
+                print(
+                    f"[DEBUG] Pattern matched! Applying config: {pattern_config['config']}"
+                )
                 recursive_update(base_config, pattern_config['config'])
                 break  # Stop checking other patterns for this config once we find a match
+
+    print(f"[DEBUG] Final config: {base_config}")
 
     # lora-specific change for pytorch
     if 'pytorch' in model_label and 'loras' in model_label:
