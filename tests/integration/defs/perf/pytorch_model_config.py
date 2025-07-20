@@ -113,8 +113,15 @@ def get_model_yaml_config(model_label: str,
             'config': {
                 'print_iter_log': False,
                 'cuda_graph_config': {
-                    'enable_padding': False,
-                    'batch_sizes': [1]
+                    'enable_padding':
+                    False,
+                    # 'batch_sizes': [1]
+                    # 'batch_sizes': list(range(1, 200))
+                    # default padding
+                    'batch_sizes': [
+                        1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
+                        104, 112, 120, 128
+                    ]
                 }
             }
         },
