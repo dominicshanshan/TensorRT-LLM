@@ -1208,7 +1208,10 @@ class MultiMetricPerfTest(AbstractPerfScriptTestClass):
         model_dir = self.get_trtllm_bench_model()
         model_name = self._config.model_name
         dataset_path = os.path.join(engine_dir, "synthetic_data.json")
-        report_path = os.path.join(engine_dir, "report.json")
+        report_dir = "/scratch_gpu/fork/TensorRT-LLM/trtllm_bench_report"
+        if not os.path.exists(report_dir):
+            os.makedirs(report_dir, exist_ok=True)
+        report_path = os.path.join(report_dir, "report.json")
         if not model_name.endswith("_hf"):
             model_name = model_name + "_hf"
         hf_model_name = HF_MODEL_PATH.get(model_name, "")
@@ -1257,7 +1260,7 @@ class MultiMetricPerfTest(AbstractPerfScriptTestClass):
         if not os.path.exists(iteration_log_dir):
             os.makedirs(iteration_log_dir, exist_ok=True)
         benchmark_cmd += [
-            f"--iteration_log={iteration_log_dir}/cuda_graph_disable_bs_1_input_output_len_128_128.log"
+            f"--iteration_log={iteration_log_dir}/cuda_graph_padding.log"
         ]
         return benchmark_cmd
 
