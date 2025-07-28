@@ -154,7 +154,8 @@ class ReportUtility:
                  rt_cfg: RuntimeConfig,
                  logger: Logger,
                  kwargs: Dict[str, Any],
-                 streaming: bool = False) -> None:
+                 streaming: bool = False,
+                 cuda_graph_memory_info: Dict[str, Any] = None) -> None:
         """Initialize the ReportingController.
 
         Args:
@@ -171,6 +172,7 @@ class ReportUtility:
         self.logger = logger
         self.kwargs = kwargs
         self.streaming = streaming
+        self.cuda_graph_memory_info = cuda_graph_memory_info
 
     @staticmethod
     def convert_to_ms(ns: float) -> float:
@@ -422,6 +424,10 @@ class ReportUtility:
         # Dataset metadata
         stats_dict["dataset"] = self.dataset_metadata.model_dump(by_alias=True,
                                                                  mode='json')
+
+        # CUDA Graph Memory Information (for PyTorch backend)
+        if self.cuda_graph_memory_info is not None:
+            stats_dict["cuda_graph_memory"] = self.cuda_graph_memory_info
 
         return stats_dict
 
