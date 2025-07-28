@@ -5,6 +5,7 @@ import gc
 import inspect
 import math
 import os
+import time
 import traceback
 import weakref
 from abc import ABC, abstractmethod
@@ -63,6 +64,159 @@ from .resource_manager import (BaseResourceManager, KVCacheManager,
 from .scheduler import ScheduledRequests
 
 MAX_UINT64 = (1 << 64) - 1
+
+
+class CudaGraphMemoryTracker:
+    """
+    Runtime memory monitoring for CUDA graphs in PyTorch backend.
+    Tracks memory usage during graph capture and execution.
+    """
+
+    def __init__(self, model_engine_name: str = "PyTorchModelEngine"):
+        self.model_engine_name = model_engine_name
+        self.memory_snapshots = []
+        self.graph_memory_info = {}
+        self.baseline_memory = None
+
+    def capture_memory_snapshot(self, stage: str, extra_info: dict = None):
+        """Capture memory usage at different stages."""
+        torch.cuda.synchronize()  # Ensure all operations are complete
+
+        snapshot = {
+            'stage': stage,
+            'timestamp': time.time(),
+            'allocated_bytes': torch.cuda.memory_allocated(),
+            'reserved_bytes': torch.cuda.memory_reserved(),
+            'peak_allocated': torch.cuda.max_memory_allocated(),
+            'peak_reserved': torch.cuda.max_memory_reserved(),
+        }
+
+        if extra_info:
+            snapshot.update(extra_info)
+
+        self.memory_snapshots.append(snapshot)
+
+        logger.debug(
+            f"[CUDA Graph Memory] {stage}: "
+            f"Allocated={snapshot['allocated_bytes']/(1024**3):.2f}GB, "
+            f"Reserved={snapshot['reserved_bytes']/(1024**3):.2f}GB")
+
+        return snapshot
+
+    def track_graph_capture(self, batch_size: int, pool_info: tuple = None):
+        """Track memory for a specific graph capture."""
+        before = self.capture_memory_snapshot(
+            f"before_graph_capture_bs{batch_size}")
+
+        def after_capture_callback():
+            after = self.capture_memory_snapshot(
+                f"after_graph_capture_bs{batch_size}", {
+                    'batch_size': batch_size,
+                    'pool_info': pool_info
+                })
+
+            memory_increase = after['allocated_bytes'] - before[
+                'allocated_bytes']
+            self.graph_memory_info[batch_size] = {
+                'memory_increase_bytes': memory_increase,
+                'memory_increase_mb': memory_increase / (1024 * 1024),
+                'pool_info': pool_info,
+                'capture_time': after['timestamp'] - before['timestamp']
+            }
+
+            logger.info(f"[CUDA Graph Memory] Batch size {batch_size}: "
+                        f"Memory increase = {memory_increase/(1024**2):.1f} MB")
+
+        return after_capture_callback
+
+    def monitor_cuda_graph_memory_usage(self,
+                                        cuda_graphs: dict,
+                                        cuda_graph_mem_pool: tuple = None):
+        """Monitor actual memory usage during execution."""
+        memory_info = {
+            'timestamp': time.time(),
+            'total_graphs': len(cuda_graphs),
+            'graph_details': {}
+        }
+
+        # Track individual graphs
+        for batch_size, graph_runner in cuda_graphs.items():
+            graph_detail = {'batch_size': batch_size}
+
+            if hasattr(graph_runner,
+                       '_graph') and graph_runner._graph is not None:
+                try:
+                    pool_info = graph_runner._graph.pool()
+                    if pool_info and len(pool_info) >= 2:
+                        graph_detail.update({
+                            'pool_id':
+                            pool_info[0],
+                            'pool_size_bytes':
+                            pool_info[1],
+                            'pool_size_mb':
+                            pool_info[1] / (1024 * 1024) if pool_info[1] else 0
+                        })
+                except Exception as e:
+                    graph_detail['pool_error'] = str(e)
+
+            memory_info['graph_details'][batch_size] = graph_detail
+
+        # Overall memory stats
+        memory_info.update({
+            'total_pytorch_allocated_gb':
+            torch.cuda.memory_allocated() / (1024**3),
+            'total_pytorch_reserved_gb':
+            torch.cuda.memory_reserved() / (1024**3),
+            'peak_allocated_gb':
+            torch.cuda.max_memory_allocated() / (1024**3),
+            'peak_reserved_gb':
+            torch.cuda.max_memory_reserved() / (1024**3)
+        })
+
+        # Add memory pool information
+        if cuda_graph_mem_pool and len(cuda_graph_mem_pool) >= 2:
+            memory_info['shared_memory_pool'] = {
+                'pool_id': cuda_graph_mem_pool[0],
+                'pool_size_bytes': cuda_graph_mem_pool[1],
+                'pool_size_mb': cuda_graph_mem_pool[1] / (1024 * 1024)
+            }
+
+        return memory_info
+
+    def get_cuda_graph_overhead_summary(self):
+        """Calculate total memory overhead from CUDA graphs."""
+        if len(self.memory_snapshots) < 2:
+            return {"error": "Not enough snapshots to calculate overhead"}
+
+        total_graph_memory = sum(
+            info.get('memory_increase_bytes', 0)
+            for info in self.graph_memory_info.values())
+
+        return {
+            'total_graphs':
+            len(self.graph_memory_info),
+            'total_graph_memory_mb':
+            total_graph_memory / (1024 * 1024),
+            'total_graph_memory_gb':
+            total_graph_memory / (1024**3),
+            'avg_memory_per_graph_mb':
+            (total_graph_memory / len(self.graph_memory_info) /
+             (1024 * 1024)) if self.graph_memory_info else 0,
+            'graph_breakdown':
+            self.graph_memory_info,
+            'snapshots_count':
+            len(self.memory_snapshots)
+        }
+
+    def reset_peak_memory_stats(self):
+        """Reset peak memory statistics."""
+        torch.cuda.reset_peak_memory_stats()
+        self.baseline_memory = torch.cuda.memory_allocated()
+
+    def log_memory_summary(self):
+        """Log a comprehensive memory summary."""
+        summary = self.get_cuda_graph_overhead_summary()
+        logger.info(f"[CUDA Graph Memory Summary] {summary}")
 
 
 class ModelEngine(ABC):
@@ -451,6 +605,12 @@ class PyTorchModelEngine(ModelEngine):
                 dtype=torch.int32)
         else:
             self.cache_indirection_attention = None
+            
+        # Initialize CUDA Graph Memory Tracker
+        self.cuda_graph_memory_tracker = CudaGraphMemoryTracker(
+            "PyTorchModelEngine")
+        self.cuda_graph_memory_tracker.capture_memory_snapshot(
+            "engine_initialization")
 
     def set_lora_model_config(self, lora_target_modules: list[str],
                               trtllm_modules_to_hf_modules: dict[str, str]):
@@ -729,6 +889,14 @@ class PyTorchModelEngine(ModelEngine):
             logger.info(
                 f"Creating CUDA graph instances for {len(self._cuda_graph_batch_sizes)} batch sizes."
             )
+
+            # Memory tracking: Capture state before CUDA graph creation
+            self.cuda_graph_memory_tracker.capture_memory_snapshot(
+                "before_cuda_graph_warmup", {
+                    'batch_sizes': self._cuda_graph_batch_sizes,
+                    'num_graphs_to_create': len(self._cuda_graph_batch_sizes)
+                })
+
             # Reverse the order of the cuda graph batch sizes to make smaller batch size graph could reuse larger batch size graph memory
             cuda_graph_batch_sizes = sorted(self._cuda_graph_batch_sizes,
                                             reverse=True)
@@ -756,6 +924,11 @@ class PyTorchModelEngine(ModelEngine):
                         if batch is None:
                             # No KV cache space!
                             return
+
+                        # Memory tracking: Before individual graph capture
+                        after_capture_callback = self.cuda_graph_memory_tracker.track_graph_capture(
+                            bs)
+
                         logger.info(
                             f"Run generation only CUDA graph warmup for batch size={bs}, draft_len={draft_len}"
                         )
@@ -790,6 +963,16 @@ class PyTorchModelEngine(ModelEngine):
 
         # Set the value back to the original value
         self.enable_spec_decode = self.is_spec_decode
+
+        # Memory tracking: Final state after all CUDA graphs are created
+        self.cuda_graph_memory_tracker.capture_memory_snapshot(
+            "after_cuda_graph_warmup", {
+                'total_graphs_created': len(self._cuda_graphs),
+                'cuda_graph_mem_pool': self._cuda_graph_mem_pool
+            })
+
+        # Log memory summary
+        self.cuda_graph_memory_tracker.log_memory_summary()
 
     def _set_up_attn_metadata(self, kv_cache_manager: KVCacheManager):
         enable_paged_context_mla = is_mla(
@@ -2179,6 +2362,16 @@ class PyTorchModelEngine(ModelEngine):
 
             self.iter_counter += 1
 
+            # Memory tracking: Periodic monitoring during execution
+            if hasattr(
+                    self, 'cuda_graph_memory_tracker'
+            ) and self.iter_counter % 100 == 0:  # Monitor every 100 iterations
+                memory_info = self.cuda_graph_memory_tracker.monitor_cuda_graph_memory_usage(
+                    self._cuda_graphs, self._cuda_graph_mem_pool)
+                logger.debug(
+                    f"[CUDA Graph Memory] Iteration {self.iter_counter}: {memory_info}"
+                )
+
             if maybe_graph is None:
                 with MoeLoadBalancerIterContext(moe_load_balancer):
                     outputs = self._forward_step(inputs, gather_ids,
@@ -2228,6 +2421,55 @@ class PyTorchModelEngine(ModelEngine):
             return trace_func(self.model.forward)(**kwargs)
         else:
             return self.model.forward(**kwargs)
+
+    # CUDA Graph Memory Monitoring API Methods
+    def get_cuda_graph_memory_info(self) -> dict:
+        """
+        Get comprehensive CUDA graph memory information.
+
+        Returns:
+            dict: Memory information including graph details, pool info, and summary
+        """
+        if not hasattr(self, 'cuda_graph_memory_tracker'):
+            return {"error": "Memory tracker not initialized"}
+
+        return self.cuda_graph_memory_tracker.monitor_cuda_graph_memory_usage(
+            self._cuda_graphs, self._cuda_graph_mem_pool)
+
+    def get_cuda_graph_memory_summary(self) -> dict:
+        """
+        Get a summary of CUDA graph memory overhead.
+
+        Returns:
+            dict: Summary with total memory usage, number of graphs, etc.
+        """
+        if not hasattr(self, 'cuda_graph_memory_tracker'):
+            return {"error": "Memory tracker not initialized"}
+
+        return self.cuda_graph_memory_tracker.get_cuda_graph_overhead_summary()
+
+    def log_cuda_graph_memory_summary(self):
+        """Log detailed CUDA graph memory summary."""
+        if hasattr(self, 'cuda_graph_memory_tracker'):
+            self.cuda_graph_memory_tracker.log_memory_summary()
+        else:
+            logger.warning("CUDA Graph memory tracker not available")
+
+    def get_cuda_graph_pool_info(self) -> dict:
+        """
+        Get information about the shared CUDA graph memory pool.
+
+        Returns:
+            dict: Pool information including ID and size
+        """
+        if self._cuda_graph_mem_pool and len(self._cuda_graph_mem_pool) >= 2:
+            return {
+                'pool_id': self._cuda_graph_mem_pool[0],
+                'pool_size_bytes': self._cuda_graph_mem_pool[1],
+                'pool_size_mb': self._cuda_graph_mem_pool[1] / (1024 * 1024),
+                'pool_size_gb': self._cuda_graph_mem_pool[1] / (1024**3)
+            }
+        return {"error": "No CUDA graph memory pool available"}
 
     @nvtx_range("_forward_step")
     def _forward_step(self,

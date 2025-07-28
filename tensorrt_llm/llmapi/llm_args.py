@@ -2201,6 +2201,52 @@ class TorchLlmArgs(BaseLlmArgs):
 
         return self
 
+    @staticmethod
+    def _generate_cuda_graph_batch_sizes(max_batch_size: int,
+                                         enable_padding: bool) -> List[int]:
+        """Generate a list of batch sizes for CUDA graphs.
+
+        Args:
+            max_batch_size: Maximum batch size to generate up to
+            enable_padding: Whether padding is enabled, which affects the batch size distribution
+
+        Returns:
+            List of batch sizes to create CUDA graphs for
+        """
+        if enable_padding:
+            batch_sizes = [1, 2, 4] + [i * 8 for i in range(1, 17)]
+        else:
+            batch_sizes = list(range(1, 32)) + [32, 64, 128]
+
+        # Add tile size 64 batch sizes starting from 192
+        # This provides better memory alignment and coverage for medium-large batch sizes
+        # Generates: [192, 256, 320, 384, 448, 512, 576, 640, ...]
+        tile_size = 64
+        start_from = 128
+        if max_batch_size >= start_from:
+            tile_batch_sizes = [
+                start_from + i * tile_size
+                for i in range(1, (max_batch_size - start_from) // tile_size +
+                               1)
+                if start_from + i * tile_size <= max_batch_size
+            ]
+            batch_sizes += tile_batch_sizes
+
+        # Add powers of 2 up to max_batch_size
+        # batch_sizes += [
+        #     2**i for i in range(8, math.floor(math.log(max_batch_size, 2)))
+        # ]
+
+        # Filter and sort batch sizes
+        batch_sizes = sorted(
+            [size for size in batch_sizes if size <= max_batch_size])
+
+        # Add max_batch_size if not already included
+        if max_batch_size != batch_sizes[-1]:
+            batch_sizes.append(max_batch_size)
+
+        return batch_sizes
+
     @model_validator(mode="after")
     def validate_load_balancer(self) -> 'TorchLlmArgs':
         from .._torch import MoeLoadBalancerConfig
