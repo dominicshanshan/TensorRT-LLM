@@ -56,6 +56,8 @@ from ..utils import (get_model_extra_attrs, set_torch_compiling,
                      with_model_extra_attrs)
 from .config import LoadFormat, PyTorchConfig
 from .config_utils import is_mla
+from .cuda_graph_properties import (CUDAGraphProperties,
+                                    log_cuda_graph_properties)
 from .cuda_graph_runner import DecodingCUDAGraphRunner
 from .layerwise_nvtx_marker import LayerwiseNvtxMarker
 from .llm_request import get_draft_token_length
@@ -605,7 +607,7 @@ class PyTorchModelEngine(ModelEngine):
                 dtype=torch.int32)
         else:
             self.cache_indirection_attention = None
-            
+
         # Initialize CUDA Graph Memory Tracker
         self.cuda_graph_memory_tracker = CudaGraphMemoryTracker(
             "PyTorchModelEngine")
@@ -971,8 +973,14 @@ class PyTorchModelEngine(ModelEngine):
                 'cuda_graph_mem_pool': self._cuda_graph_mem_pool
             })
 
-        # Log memory summary
+        # Log memory summary and CUDA graph properties
         self.cuda_graph_memory_tracker.log_memory_summary()
+
+        # Extract and log CUDA graph properties
+        if self._cuda_graphs:
+            logger.info("Extracting CUDA graph properties...")
+            self._cuda_graph_properties = log_cuda_graph_properties(
+                self._cuda_graphs)
 
     def _set_up_attn_metadata(self, kv_cache_manager: KVCacheManager):
         enable_paged_context_mla = is_mla(
@@ -1177,10 +1185,41 @@ class PyTorchModelEngine(ModelEngine):
         if batch_size not in self._cuda_graphs:
             self._cuda_graphs[batch_size] = {}
 
-        self._cuda_graphs[batch_size][draft_len] = DecodingCUDAGraphRunner(
-            batch_size, "cuda", attn_metadata, spec_metadata, self.use_mrope,
-            self.max_beam_width)
-        return self._cuda_graphs[batch_size][draft_len]
+        # Create the CUDA graph runner
+        graph_runner = DecodingCUDAGraphRunner(batch_size, "cuda",
+                                               attn_metadata, spec_metadata,
+                                               self.use_mrope,
+                                               self.max_beam_width)
+
+        # Store it in the dictionary
+        self._cuda_graphs[batch_size][draft_len] = graph_runner
+        return graph_runner
+
+    def get_cuda_graph_properties(self,
+                                  batch_size: int = None) -> Dict[str, Any]:
+        """
+        Get CUDA graph properties for a specific batch size or all graphs.
+
+        Args:
+            batch_size: Optional batch size to get properties for. If None, returns all.
+
+        Returns:
+            Dictionary containing CUDA graph properties
+        """
+        if not hasattr(self, '_cuda_graph_properties'):
+            return {"error": "CUDA graph properties not yet extracted"}
+
+        if batch_size is not None:
+            return self._cuda_graph_properties.get(
+                batch_size,
+                {"error": f"No properties for batch size {batch_size}"})
+        else:
+            return self._cuda_graph_properties
+
+    def log_cuda_graph_stats(self):
+        """Log current CUDA graph statistics."""
+        if hasattr(self, '_cuda_graph_properties'):
+            log_cuda_graph_properties(self._cuda_graphs)
 
     def __del__(self) -> None:
         if getattr(self, 'ub_buffers', None):
@@ -2391,6 +2430,34 @@ class PyTorchModelEngine(ModelEngine):
                         self._cuda_graph_mem_pool,
                     )
                     self._cuda_graph_mem_pool = pool
+
+                    # Extract CUDA graph properties after capture
+                    if hasattr(maybe_graph,
+                               '_graph') and maybe_graph._graph is not None:
+                        try:
+                            # Create a temporary graph with keep_graph=True for property extraction
+                            extractor = CUDAGraphProperties()
+                            temp_graph = torch.cuda.CUDAGraph(keep_graph=True)
+
+                            # Capture with the temporary graph
+                            original_graph = maybe_graph._graph
+                            maybe_graph._graph = temp_graph
+                            maybe_graph.capture(capture_forward_fn,
+                                                self._cuda_graph_mem_pool)
+
+                            # Extract properties
+                            properties = extractor.extract_graph_properties(
+                                temp_graph)
+                            logger.info(
+                                f"CUDA Graph Properties for batch_size={scheduled_requests.generation_requests[0].batch_size if scheduled_requests.generation_requests else 'unknown'}:"
+                            )
+                            logger.info(extractor.format_properties(properties))
+
+                            # Restore original graph
+                            maybe_graph._graph = original_graph
+                        except Exception as e:
+                            logger.warning(
+                                f"Failed to extract CUDA graph properties: {e}")
 
                     # here we don't need to use context since cuda graph capture didn't run kernel.
                     # maybe we need a cleaner way to do this.

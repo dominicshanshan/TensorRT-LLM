@@ -127,7 +127,6 @@ MODEL_PATH_DICT = {
     "phi_4_multimodal_instruct_audio": "multimodals/Phi-4-multimodal-instruct",
     "bielik_11b_v2.2_instruct": "Bielik-11B-v2.2-Instruct",
     "bielik_11b_v2.2_instruct_fp8": "Bielik-11B-v2.2-Instruct-FP8",
-    "mistral_small_v3.1_24b": "Mistral-Small-3.1-24B-Instruct-2503",
 }
 # Model PATH of HuggingFace
 HF_MODEL_PATH = {
@@ -1248,10 +1247,7 @@ class MultiMetricPerfTest(AbstractPerfScriptTestClass):
         model_dir = self.get_trtllm_bench_model()
         model_name = self._config.model_name
         dataset_path = os.path.join(engine_dir, "synthetic_data.json")
-        report_dir = "/scratch_gpu/fork/TensorRT-LLM/trtllm_bench_report"
-        if not os.path.exists(report_dir):
-            os.makedirs(report_dir, exist_ok=True)
-        report_path = os.path.join(report_dir, "report.json")
+        report_path = os.path.join(engine_dir, "report.json")
         if not model_name.endswith("_hf"):
             model_name = model_name + "_hf"
         hf_model_name = HF_MODEL_PATH.get(model_name, "")
@@ -1298,22 +1294,7 @@ class MultiMetricPerfTest(AbstractPerfScriptTestClass):
             print_info(f"pytorch model config: {config}")
             with open(pytorch_config_path, 'w') as f:
                 yaml.dump(config, f, default_flow_style=False)
-<<<<<<< HEAD
             benchmark_cmd += [f"--extra_llm_api_options={pytorch_config_path}"]
-=======
-            benchmark_cmd += [
-                f"--extra_llm_api_options=extra-llm-api-config.yml"
-            ]
-        # Add iteration logging for CUDA graph analysis
-        iteration_log_dir = "/scratch_gpu/fork/TensorRT-LLM/trtllm_bench_iteration_log"
-        if not os.path.exists(iteration_log_dir):
-            os.makedirs(iteration_log_dir, exist_ok=True)
-        benchmark_cmd += [
-            f"--iteration_log={iteration_log_dir}/cuda_graph_padding.log"
-        ]
-
-        print_info(f"benchmark_cmd: {benchmark_cmd}")
->>>>>>> 9d2ab5de3 (Add cuda graph memory size logs.)
         return benchmark_cmd
 
     def get_gpt_manager_runtime_benchmark_command(self, engine_dir, bs,

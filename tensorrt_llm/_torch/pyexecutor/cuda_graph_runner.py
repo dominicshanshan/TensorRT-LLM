@@ -83,7 +83,9 @@ class DecodingCUDAGraphRunner:
         forward_fn: Callable[[Dict[str, Any]], torch.Tensor],
         pool: Optional[Tuple[int, int]] = None,
     ) -> Tuple[int, int]:
+        # Step 1: Create CUDA graph object
         self._graph = torch.cuda.CUDAGraph()
+        # Step 2: Prepare inputs
         inputs = {
             "attn_metadata": self.attn_metadata,
             "input_ids": self.input_ids,
@@ -97,16 +99,20 @@ class DecodingCUDAGraphRunner:
         # internal states according to the docs:
         # https://pytorch.org/docs/stable/notes/cuda.html#cuda-graph-semantics
         # This also lets us initialize states in the attn_metadata.
+        # Step 3: Warm up
         set_graph_capturing(True)
         set_piecewise_cuda_graph_flag(False)
         for _ in range(2):
             forward_fn(inputs)
+        # Step 4: Graph capture
         with torch.cuda.graph(self._graph, pool=pool):
             output = forward_fn(inputs)
         set_graph_capturing(False)
         set_piecewise_cuda_graph_flag(True)
         # Mark weak ref here. The output tensor should be freed properly.
+        # Step 5: Store output and return pool info
         self._output = make_weak_ref(output)
+        # Returns (pool_id, pool_size_bytes)
         return self._graph.pool()
 
     def needs_capture(self) -> bool:
@@ -128,6 +134,7 @@ class DecodingCUDAGraphRunner:
                 "spec_metadata does not match the spec_metadata instance that was used to "
                 "capture this graph.")
 
+        # Copy new data into pre-allocated buffers
         input_ids = inputs["input_ids"]
         position_ids = inputs["position_ids"]
         seqlen = input_ids.shape[0]
@@ -138,5 +145,6 @@ class DecodingCUDAGraphRunner:
                 inputs["mrope_position_deltas"])
 
         assert self._output is not None and self._graph is not None
+        # Replay the captured graph
         self._graph.replay()
         return self._output

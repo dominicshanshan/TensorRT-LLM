@@ -342,11 +342,6 @@ class DecodingBaseConfig(StrictBaseModel):
     max_draft_len: Optional[int] = None
     speculative_model_dir: Optional[Union[str, Path]] = None
 
-    # PyTorch only.
-    # When specified, speculation will be disabled at batch sizes above
-    # this value. Otherwise, speculation will always be on.
-    max_concurrency: Optional[int] = None
-
     @classmethod
     def from_dict(cls, data: dict):
         # dispatch to the correct decoding config
@@ -474,6 +469,9 @@ class NGramDecodingConfig(DecodingBaseConfig):
     is_keep_all: bool = True
     is_use_oldest: bool = True
     is_public_pool: bool = True
+    # Flag to indicate the NGramDecodingConfig is instantiated by auto heuristic.
+    # User should not set this flag. Use AutoDecodingConfig instead.
+    is_auto_heuristic: bool = False
 
     @classmethod
     def from_dict(cls, data: dict):
@@ -537,10 +535,13 @@ class AutoDecodingConfig(DecodingBaseConfig):
     """
     Configuration for auto speculative decoding.
 
-    This config will automatically select a good, draft-model free
-    speculation algorithm with some heuristic.
+    This config is used to automatically select the best speculative decoding algorithm.
 
-    Attributes that are inherited from the base class are ignored.
+    According to benchmark results, the best algorithm in general is NGRAM with low concurrency <= 32.
+    Default heuristic:
+        With concurrency <= 4, max_draft_len = 5, max_matching_ngram_size = 3
+        With concurrency <= 32, max_draft_len = 3, max_matching_ngram_size = 5
+        With concurrency > 32, speculative decoding is disabled.
     """
 
     @classmethod
@@ -969,11 +970,6 @@ class KvCacheConfig(StrictBaseModel, PybindMirror):
         description=
         "Maximum size of the event buffer. If set to 0, the event buffer will not be used."
     )
-    attention_dp_events_gather_period_ms: int = Field(
-        default=5,
-        description=
-        "The period in milliseconds to gather attention DP events across ranks."
-    )
     enable_partial_reuse: bool = Field(
         default=True,
         description=
@@ -1012,10 +1008,7 @@ class KvCacheConfig(StrictBaseModel, PybindMirror):
             event_buffer_max_size=self.event_buffer_max_size,
             enable_partial_reuse=self.enable_partial_reuse,
             copy_on_partial_reuse=self.copy_on_partial_reuse,
-            use_uvm=self.use_uvm,
-            attention_dp_events_gather_period_ms=self.
-            attention_dp_events_gather_period_ms,
-        )
+            use_uvm=self.use_uvm)
 
 
 @PybindMirror.mirror_pybind_fields(_ExtendedRuntimePerfKnobConfig)
@@ -1318,10 +1311,6 @@ class BaseLlmArgs(StrictBaseModel):
         validate_default=True,
         status="deprecated",
     )
-
-    return_perf_metrics: bool = Field(default=False,
-                                      description="Return perf metrics.",
-                                      status="prototype")
 
     _parallel_config: Optional[object] = PrivateAttr(default=None)
     _model_format: Optional[_ModelFormatKind] = PrivateAttr(default=None)
@@ -2049,11 +2038,11 @@ class TorchLlmArgs(BaseLlmArgs):
         "If true, will iterate over sampling_params of each request and use the corresponding sampling strategy, e.g. top-k, top-p, etc.",
         status="beta")
 
-    use_torch_sampler: bool = Field(
+    enable_trtllm_sampler: bool = Field(
         default=False,
         description=
-        "If true, will use the Torch sampler instead of the TRTLLM sampler.",
-        status="beta")
+        "If true, will use the TRTLLM sampler instead of the PyTorch sampler. The TRTLLM sampler has a wide coverage of sampling strategies.",
+        status="prototype")
 
     enable_iter_perf_stats: bool = Field(
         default=False,
@@ -2110,12 +2099,14 @@ class TorchLlmArgs(BaseLlmArgs):
         status="prototype",
     )
 
-    allreduce_strategy: Optional[Literal[
-        'AUTO', 'NCCL', 'UB', 'MINLATENCY', 'ONESHOT', 'TWOSHOT',
-        'LOWPRECISION', 'MNNVL',
-        'NCCL_SYMMETRIC']] = Field(default='AUTO',
-                                   description="Allreduce strategy to use.",
-                                   status="beta")
+    allreduce_strategy: Optional[
+        Literal['AUTO', 'NCCL', 'UB', 'MINLATENCY', 'ONESHOT', 'TWOSHOT',
+                'LOWPRECISION', 'MNNVL']] = Field(
+                    default='AUTO',
+                    description="Allreduce strategy to use.",
+                    status="beta",
+                )
+
     checkpoint_loader: Optional[object] = Field(
         default=None,
         description="The checkpoint loader to use for this LLM instance.",
@@ -2200,52 +2191,6 @@ class TorchLlmArgs(BaseLlmArgs):
             self.checkpoint_format = "HF"
 
         return self
-
-    @staticmethod
-    def _generate_cuda_graph_batch_sizes(max_batch_size: int,
-                                         enable_padding: bool) -> List[int]:
-        """Generate a list of batch sizes for CUDA graphs.
-
-        Args:
-            max_batch_size: Maximum batch size to generate up to
-            enable_padding: Whether padding is enabled, which affects the batch size distribution
-
-        Returns:
-            List of batch sizes to create CUDA graphs for
-        """
-        if enable_padding:
-            batch_sizes = [1, 2, 4] + [i * 8 for i in range(1, 17)]
-        else:
-            batch_sizes = list(range(1, 32)) + [32, 64, 128]
-
-        # Add tile size 64 batch sizes starting from 192
-        # This provides better memory alignment and coverage for medium-large batch sizes
-        # Generates: [192, 256, 320, 384, 448, 512, 576, 640, ...]
-        tile_size = 64
-        start_from = 128
-        if max_batch_size >= start_from:
-            tile_batch_sizes = [
-                start_from + i * tile_size
-                for i in range(1, (max_batch_size - start_from) // tile_size +
-                               1)
-                if start_from + i * tile_size <= max_batch_size
-            ]
-            batch_sizes += tile_batch_sizes
-
-        # Add powers of 2 up to max_batch_size
-        # batch_sizes += [
-        #     2**i for i in range(8, math.floor(math.log(max_batch_size, 2)))
-        # ]
-
-        # Filter and sort batch sizes
-        batch_sizes = sorted(
-            [size for size in batch_sizes if size <= max_batch_size])
-
-        # Add max_batch_size if not already included
-        if max_batch_size != batch_sizes[-1]:
-            batch_sizes.append(max_batch_size)
-
-        return batch_sizes
 
     @model_validator(mode="after")
     def validate_load_balancer(self) -> 'TorchLlmArgs':
@@ -2384,7 +2329,7 @@ class TorchLlmArgs(BaseLlmArgs):
             attn_backend=self.attn_backend,
             moe_backend=self.moe_config.backend,
             enable_mixed_sampler=self.enable_mixed_sampler,
-            use_torch_sampler=self.use_torch_sampler,
+            enable_trtllm_sampler=self.enable_trtllm_sampler,
             kv_cache_dtype=self.kv_cache_config.dtype,
             mamba_ssm_cache_dtype=self.kv_cache_config.mamba_ssm_cache_dtype,
             enable_iter_perf_stats=self.enable_iter_perf_stats,
