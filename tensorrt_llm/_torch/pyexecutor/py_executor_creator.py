@@ -16,7 +16,8 @@ from tensorrt_llm.bindings.executor import (CapacitySchedulerPolicy,
                                             ContextChunkingPolicy,
                                             ExecutorConfig)
 from tensorrt_llm.bindings.internal.batch_manager import ContextChunkingConfig
-from tensorrt_llm.llmapi.llm_args import KvCacheConnectorConfig
+from tensorrt_llm.llmapi.llm_args import KvCacheConnectorConfig, TorchLlmArgs
+from tensorrt_llm.llmapi.tokenizer import TokenizerBase
 from tensorrt_llm.logger import logger
 from tensorrt_llm.lora_helper import LoraConfig
 from tensorrt_llm.mapping import Mapping
@@ -30,7 +31,7 @@ from ._util import (KvCacheCreator, _adjust_torch_mem_fraction,
                     create_py_executor_instance, instantiate_sampler, is_mla)
 from .config import LoadFormat, PyTorchConfig
 from .config_utils import is_mla
-from .guided_decoder import GuidedDecoder
+from .guided_decoder import CapturableGuidedDecoder, GuidedDecoder
 from .kv_cache_connector import KvCacheConnectorManager
 from .model_engine import PyTorchModelEngine
 from .py_executor import PyExecutor
@@ -209,12 +210,16 @@ def _get_mapping(executor_config: ExecutorConfig) -> Mapping:
 
 
 def create_py_executor(
-        executor_config: ExecutorConfig,
-        checkpoint_dir: str = None,
-        lora_config: Optional[LoraConfig] = None,
-        garbage_collection_gen0_threshold: Optional[int] = None,
-        kv_connector_config: Optional[KvCacheConnectorConfig] = None
+    llm_args: TorchLlmArgs,
+    checkpoint_dir: str = None,
+    tokenizer: Optional[TokenizerBase] = None,
+    lora_config: Optional[LoraConfig] = None,
+    kv_connector_config: Optional[KvCacheConnectorConfig] = None,
 ) -> PyExecutor:
+
+    executor_config = llm_args.get_executor_config(checkpoint_dir, tokenizer)
+    garbage_collection_gen0_threshold = llm_args.garbage_collection_gen0_threshold
+
     _mangle_executor_config(executor_config)
     pytorch_backend_config = executor_config.pytorch_backend_config
 
@@ -260,12 +265,28 @@ def create_py_executor(
         with mem_monitor.observe_creation_stage(
                 _ExecutorCreationStage.MODEL_ENGINE_DRAFT):
             draft_spec_config = copy.copy(spec_config)
-            draft_pytorch_backend_config = copy.copy(pytorch_backend_config)
-            if spec_config.load_format == "dummy":
-                draft_pytorch_backend_config.load_format = LoadFormat.DUMMY
             # The draft model won't have any draft tokens attached to
             # generation requests when we invoke it autoregressively
             draft_spec_config.max_draft_len = 0
+
+            use_chain_drafter = (
+                executor_config.guided_decoding_config is None
+                and not pytorch_backend_config.enable_mixed_sampler
+                and pytorch_backend_config.attn_backend == "TRTLLM")
+
+            if use_chain_drafter:
+
+                def drafting_loop_wrapper(model):
+                    from tensorrt_llm._torch.speculative.drafting_loops import \
+                        ChainDrafter
+
+                    return ChainDrafter(spec_config.max_draft_len, model)
+            else:
+                drafting_loop_wrapper = None
+
+            draft_pytorch_backend_config = copy.copy(pytorch_backend_config)
+            if spec_config.load_format == "dummy":
+                draft_pytorch_backend_config.load_format = LoadFormat.DUMMY
 
             draft_model_engine = PyTorchModelEngine(
                 model_path=spec_config.speculative_model_dir,
@@ -282,6 +303,7 @@ def create_py_executor(
                 spec_config=draft_spec_config,
                 checkpoint_loader=executor_config.checkpoint_loader,
                 is_draft_model=True,
+                drafting_loop_wrapper=drafting_loop_wrapper,
             )
             draft_model_engine.kv_cache_manager_key = ResourceManagerType.DRAFT_KV_CACHE_MANAGER
             draft_model_engine.load_weights_from_target_model(
@@ -364,19 +386,33 @@ def create_py_executor(
             _ExecutorCreationStage.GUIDED_DECODER):
         guided_decoder: Optional[GuidedDecoder] = None
         if executor_config.guided_decoding_config is not None:
-            if spec_config is not None and not has_spec_drafter:
-                raise ValueError(
-                    "Guided decoding is only supported with speculative decoding that has a dedicated drafter (two-model engine)."
-                )
             if mapping.is_last_pp_rank():
-                max_num_draft_tokens = 0
-                if spec_config is not None:
-                    max_num_draft_tokens = spec_config.max_draft_len
-                guided_decoder = GuidedDecoder(
+                kwargs = {
+                    "guided_decoding_config":
                     executor_config.guided_decoding_config,
-                    executor_config.max_batch_size,
-                    model_engine.model.vocab_size_padded,
-                    max_num_draft_tokens=max_num_draft_tokens)
+                    "max_num_sequences": executor_config.max_batch_size,
+                    "vocab_size_padded": model_engine.model.vocab_size_padded
+                }
+                if spec_config is not None:
+                    kwargs["max_num_draft_tokens"] = spec_config.max_draft_len
+
+                if spec_config is None or spec_config.spec_dec_mode.support_guided_decoder(
+                ):
+                    # GuidedDecoder is applicable to non-speculative decoding and two-model speculative decoding.
+                    guided_decoder = GuidedDecoder(**kwargs)
+                elif spec_config.spec_dec_mode.support_capturable_guided_decoder(
+                ):
+                    # CapturableGuidedDecoder is applicable to one-model speculative decoding.
+                    success = model_engine.set_guided_decoder(
+                        CapturableGuidedDecoder(**kwargs))
+                    if not success:
+                        raise ValueError(
+                            f"Failed to set guided decoder for speculative decoding mode: {spec_config.spec_dec_mode.name}."
+                        )
+                else:
+                    raise ValueError(
+                        f"Guided decoding is not supported for speculative decoding mode: {spec_config.spec_dec_mode.name}."
+                    )
 
     with mem_monitor.observe_creation_stage(_ExecutorCreationStage.SAMPLER):
         sampler = instantiate_sampler(model_engine, executor_config,
@@ -409,12 +445,11 @@ def create_py_executor(
             # In this case, the worker may be dependent on the scheduler, or vice-versa.
             # To deal with cases like this, we instantiate them both concurrently.
             with ThreadPoolExecutor(max_workers=2) as executor:
-                connector_worker_task = executor.submit(worker_cls,
-                                                        executor_config)
+                connector_worker_task = executor.submit(worker_cls)
 
                 if scheduler_cls is not None and rank == 0:
                     connector_scheduler_task = executor.submit(
-                        scheduler_cls, executor_config)
+                        scheduler_cls, executor_config.tokens_per_block)
                     connector_scheduler = connector_scheduler_task.result()
                 else:
                     connector_scheduler = None
@@ -484,6 +519,7 @@ def create_py_executor(
             garbage_collection_gen0_threshold=garbage_collection_gen0_threshold,
             kv_connector_manager=kv_connector_manager
             if not estimating_kv_cache else None,
+            max_seq_len=executor_config.max_seq_len,
         )
 
     if estimating_kv_cache:
@@ -528,6 +564,7 @@ def create_py_executor(
                 garbage_collection_gen0_threshold=
                 garbage_collection_gen0_threshold,
                 kv_connector_manager=kv_connector_manager,
+                max_seq_len=executor_config.max_seq_len,
             )
 
     _adjust_torch_mem_fraction(executor_config.pytorch_backend_config)
