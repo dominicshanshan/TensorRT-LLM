@@ -28,23 +28,23 @@ class CudaGraphBenchmark:
         self.output_dir = Path(
             os.environ.get(
                 'OUTPUT_DIR',
-                '/scratch_gpu/fork/TensorRT-LLM/cuda_graph_testing_logs_h200_tile_size_64_retest'
-            ))
+                '/scratch_gpu/fork/TensorRT-LLM/cuda_graph_testing_logs_gh200'))
         self.data_gen_path = Path(
             os.environ.get('DATA_GEN_PATH',
                            '/scratch_gpu/fork/TensorRT-LLM/benchmarks/cpp'))
 
-        # self.batch_sizes = [
-        #     1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32, 33, 48, 49, 64, 65, 96, 97, 128, 160, 192, 200,
-        #     256, 320, 384, 390, 396, 400, 412, 416, 420, 500, 512, 528, 576, 608, 640, 672, 704,
-        #     736, 768, 900, 1024, 1032, 1040, 1280, 1408, 1536, 1792, 1920, 2000
-        # ]
-        # self.batch_sizes = [1, 2, 4, 8, 16, 24, 32, 33, 48, 49]
         self.batch_sizes = [
-            128, 160, 192, 200, 256, 320, 384, 390, 396, 400, 412, 416, 420,
-            500, 512, 528, 576, 608, 640, 672, 704, 736, 768, 900, 1024, 1032,
-            1040, 1280, 1408, 1536, 1792, 1920, 2000
+            1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32, 33, 48, 49, 64, 65, 96, 97, 128,
+            160, 192, 200, 256, 320, 384, 390, 396, 400, 412, 416, 420, 500,
+            512, 528, 576, 608, 640, 672, 704, 736, 768, 900, 1024, 1032, 1040,
+            1280, 1408, 1536, 1792, 1920, 2000
         ]
+        # self.batch_sizes = [1, 2, 4, 8, 16, 24, 32, 33, 48, 49]
+        # self.batch_sizes = [
+        #     128, 160, 192, 200, 256, 320, 384, 390, 396, 400, 412, 416, 420,
+        #     500, 512, 528, 576, 608, 640, 672, 704, 736, 768, 900, 1024, 1032,
+        #     1040, 1280, 1408, 1536, 1792, 1920, 2000
+        # ]
         self.input_length = int(os.environ.get('INPUT_LENGTH', 500))
         self.output_length = int(os.environ.get('OUTPUT_LENGTH', 2000))
         self.num_requests = int(os.environ.get('NUM_REQUESTS', 2048))
@@ -303,9 +303,10 @@ class CudaGraphBenchmark:
             dataset_path = self.generate_dataset()
             configs = {
                 # "default_padding": self.output_dir / "configs" / "padding_enabled_default.yaml",
-                # "no_padding": self.output_dir / "configs" / "padding_disabled.yaml",
-                "padding_slide_64":
-                self.output_dir / "configs" / "padding_slide_64.yaml",
+                "no_padding":
+                self.output_dir / "configs" / "padding_disabled.yaml",
+                # "padding_slide_64":
+                # self.output_dir / "configs" / "padding_slide_64.yaml",
             }
 
             total_tests = len(configs) * len(self.batch_sizes)
