@@ -347,8 +347,29 @@ def latency_command(
             # For multimodal models, we need to update the metadata with the correct input lengths
             metadata = update_metadata_for_multimodal(metadata, statistics)
 
+        # Collect CUDA graph memory information for PyTorch backend
+        cuda_graph_memory_info = None
+        if runtime_config.backend == 'pytorch' and hasattr(llm, '_executor'):
+            try:
+                # Access the model engine through the executor
+                model_engine = llm._executor.model_engine
+                if hasattr(model_engine, 'get_cuda_graph_memory_info'):
+                    cuda_graph_memory_info = {
+                        'memory_info':
+                        model_engine.get_cuda_graph_memory_info(),
+                        'memory_summary':
+                        model_engine.get_cuda_graph_memory_summary(),
+                        'pool_info':
+                        model_engine.get_cuda_graph_pool_info()
+                    }
+                    logger.info("Collected CUDA graph memory information")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to collect CUDA graph memory information: {e}")
+
         report_utility = ReportUtility(statistics, metadata, runtime_config,
-                                       logger, kwargs, True)
+                                       logger, kwargs, True,
+                                       cuda_graph_memory_info)
         # Generate reports for statistics, output tokens, and request info.
         generate_json_report(options.report_json,
                              report_utility.get_statistics_dict)
