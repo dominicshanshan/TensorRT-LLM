@@ -712,7 +712,8 @@ class PyTorchModelEngine(ModelEngine):
             return allocated_memory, reserved_memory, used
 
         # Convert bytes to MiB for logging
-        bytes_to_mib = 1 << 20  # 1024 * 1024
+        # bytes_to_mib = 1 << 20  # 1024 * 1024
+        bytes_to_mb = 1000000
 
         # Track total memory before all CUDA graphs
         total_memory_before, total_reserved_before, total_used_before = get_cuda_graph_memory_usage(
@@ -784,13 +785,13 @@ class PyTorchModelEngine(ModelEngine):
                 # Store per-batch memory usage
                 key = f"bs={bs}_draft={draft_len}"
                 batch_memory_usage[key] = {
-                    "allocated_diff": (mem_after - mem_before) / bytes_to_mib,
+                    "allocated_diff": (mem_before - mem_after) / bytes_to_mb,
                     "reserved_diff":
-                    (reserved_after - reserved_before) / bytes_to_mib,
-                    "used_diff": (used_after - used_before) / bytes_to_mib,
+                    (reserved_after - reserved_before) / bytes_to_mb,
+                    "used_diff": (used_after - used_before) / bytes_to_mb,
                     "non_torch_diff":
                     ((used_after - used_before) -
-                     (reserved_after - reserved_before)) / bytes_to_mib
+                     (reserved_after - reserved_before)) / bytes_to_mb
                 }
 
                 # Log per-batch memory usage
@@ -798,34 +799,34 @@ class PyTorchModelEngine(ModelEngine):
                     f"CUDA graph memory for batch_size={bs}, draft_len={draft_len}:"
                 )
                 logger.info(
-                    f"  Allocated memory before: {mem_before / bytes_to_mib:.6f} MiB"
+                    f"  Allocated memory before: {mem_before / bytes_to_mb:.6f} MB"
                 )
                 logger.info(
-                    f"  Allocated memory after: {mem_after / bytes_to_mib:.6f} MiB"
+                    f"  Allocated memory after: {mem_after / bytes_to_mb:.6f} MB"
                 )
                 logger.info(
-                    f"  Reserved memory before: {reserved_before / bytes_to_mib:.6f} MiB"
+                    f"  Reserved memory before: {reserved_before / bytes_to_mb:.6f} MB"
                 )
                 logger.info(
-                    f"  Reserved memory after: {reserved_after / bytes_to_mib:.6f} MiB"
+                    f"  Reserved memory after: {reserved_after / bytes_to_mb:.6f} MB"
                 )
                 logger.info(
-                    f"  Total GPU usage before: {used_before / bytes_to_mib:.6f} MiB"
+                    f"  Total GPU usage before: {used_before / bytes_to_mb:.6f} MB"
                 )
                 logger.info(
-                    f"  Total GPU usage after: {used_after / bytes_to_mib:.6f} MiB"
+                    f"  Total GPU usage after: {used_after / bytes_to_mb:.6f} MB"
                 )
                 logger.info(
-                    f"  Allocated memory: {batch_memory_usage[key]['allocated_diff']:.6f} MiB"
+                    f"  Allocated memory: {batch_memory_usage[key]['allocated_diff']:.6f} MB"
                 )
                 logger.info(
-                    f"  Reserved memory: {batch_memory_usage[key]['reserved_diff']:.6f} MiB"
+                    f"  Reserved memory: {batch_memory_usage[key]['reserved_diff']:.6f} MB"
                 )
                 logger.info(
-                    f"  Total GPU usage: {batch_memory_usage[key]['used_diff']:.6f} MiB"
+                    f"  Total GPU usage: {batch_memory_usage[key]['used_diff']:.6f} MB"
                 )
                 logger.info(
-                    f"  Non-PyTorch memory: {batch_memory_usage[key]['non_torch_diff']:.6f} MiB"
+                    f"  Non-PyTorch memory: {batch_memory_usage[key]['non_torch_diff']:.6f} MB"
                 )
 
         if self._torch_compile_piecewise_cuda_graph and self._torch_compile_enabled:
@@ -867,19 +868,19 @@ class PyTorchModelEngine(ModelEngine):
         # Log total memory usage
         logger.info("Total memory usage for all CUDA graphs:")
         logger.info(
-            f"  Memory before: {total_memory_before / bytes_to_mib:.2f} MiB (allocated), {total_reserved_before / bytes_to_mib:.2f} MiB (reserved), {total_used_before / bytes_to_mib:.2f} MiB (total GPU)"
+            f"  Memory before: {total_memory_before / bytes_to_mb:.2f} MB (allocated), {total_reserved_before / bytes_to_mb:.2f} MB (reserved), {total_used_before / bytes_to_mb:.2f} MB (total GPU)"
         )
         logger.info(
-            f"  Memory after: {total_memory_after / bytes_to_mib:.2f} MiB (allocated), {total_reserved_after / bytes_to_mib:.2f} MiB (reserved), {total_used_after / bytes_to_mib:.2f} MiB (total GPU)"
+            f"  Memory after: {total_memory_after / bytes_to_mb:.2f} MB (allocated), {total_reserved_after / bytes_to_mb:.2f} MB (reserved), {total_used_after / bytes_to_mb:.2f} MB (total GPU)"
         )
         logger.info(
-            f"  CUDA graph reserved memory: {(total_reserved_after - total_reserved_before) / bytes_to_mib:.2f} MiB (reserved)"
+            f"  CUDA graph reserved memory: {(total_reserved_after - total_reserved_before) / bytes_to_mb:.2f} MB (reserved)"
         )
         logger.info(
-            f"  CUDA graph allocated memory: {(total_memory_after - total_memory_before) / bytes_to_mib:.2f} MiB (allocated)"
+            f"  CUDA graph allocated memory: {(total_memory_after - total_memory_before) / bytes_to_mb:.2f} MB (allocated)"
         )
         logger.info(
-            f"  CUDA graph non-PyTorch memory: {((total_used_after - total_used_before) - (total_reserved_after - total_reserved_before)) / bytes_to_mib:.2f} MiB (non-PyTorch)"
+            f"  CUDA graph non-PyTorch memory: {((total_used_after - total_used_before) - (total_reserved_after - total_reserved_before)) / bytes_to_mb:.2f} MB (non-PyTorch)"
         )
         logger.info("=" * 60)
 
