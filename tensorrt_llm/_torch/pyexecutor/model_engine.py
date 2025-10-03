@@ -786,6 +786,8 @@ class PyTorchModelEngine(ModelEngine):
                 key = f"bs={bs}_draft={draft_len}"
                 batch_memory_usage[key] = {
                     "allocated_diff": (mem_before - mem_after) / bytes_to_mb,
+                    "allocated_diff_rev":
+                    (mem_after - mem_before) / bytes_to_mb,
                     "reserved_diff":
                     (reserved_after - reserved_before) / bytes_to_mb,
                     "used_diff": (used_after - used_before) / bytes_to_mb,
@@ -816,9 +818,14 @@ class PyTorchModelEngine(ModelEngine):
                 logger.info(
                     f"  Total GPU usage after: {used_after / bytes_to_mb:.6f} MB"
                 )
-                logger.info(
-                    f"  Allocated memory: {batch_memory_usage[key]['allocated_diff']:.6f} MB"
-                )
+                if bs == cuda_graph_batch_sizes[0]:
+                    logger.info(
+                        f"  Allocated memory: {batch_memory_usage[key]['allocated_diff_rev']:.6f} MB"
+                    )
+                else:
+                    logger.info(
+                        f"  Allocated memory: {batch_memory_usage[key]['allocated_diff']:.6f} MB"
+                    )
                 logger.info(
                     f"  Reserved memory: {batch_memory_usage[key]['reserved_diff']:.6f} MB"
                 )
