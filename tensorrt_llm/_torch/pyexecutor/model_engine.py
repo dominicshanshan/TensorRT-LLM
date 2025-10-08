@@ -694,12 +694,15 @@ class PyTorchModelEngine(ModelEngine):
             f"Creating CUDA graph instances for {len(self._cuda_graph_batch_sizes)} batch sizes."
         )
 
-        def get_cuda_graph_memory_usage():
+        def get_cuda_graph_memory_usage(
+            skip_empty_cache=False
+        ):  # test if empty_cache() is interfering with memory measurements
             torch.cuda.synchronize()
             for _ in range(3):
                 gc.collect()
                 torch.cuda.synchronize()
-                torch.cuda.empty_cache()
+                if not skip_empty_cache:
+                    torch.cuda.empty_cache()
                 torch.cuda.synchronize()
             # allocated_memory = torch.cuda.memory_allocated()
             allocated_memory = torch.cuda.memory_stats(
@@ -717,7 +720,7 @@ class PyTorchModelEngine(ModelEngine):
 
         # Track total memory before all CUDA graphs
         total_memory_before, total_reserved_before, total_used_before = get_cuda_graph_memory_usage(
-        )
+            skip_empty_cache=True)
 
         # Reverse the order of the cuda graph batch sizes to make smaller batch size graph could reuse larger batch size graph memory
         cuda_graph_batch_sizes = sorted(self._cuda_graph_batch_sizes,
@@ -748,7 +751,7 @@ class PyTorchModelEngine(ModelEngine):
             for draft_len in draft_lengths:
                 # Measure memory before this specific batch/draft_len combination
                 mem_before, reserved_before, used_before = get_cuda_graph_memory_usage(
-                )
+                    skip_empty_cache=True)
 
                 with release_batch(get_cuda_graph_warmup_request(
                         bs, draft_len)) as batch:
@@ -780,7 +783,7 @@ class PyTorchModelEngine(ModelEngine):
 
                 # Measure memory after this specific batch/draft_len combination
                 mem_after, reserved_after, used_after = get_cuda_graph_memory_usage(
-                )
+                    skip_empty_cache=True)
 
                 # Store per-batch memory usage
                 key = f"bs={bs}_draft={draft_len}"
@@ -793,7 +796,9 @@ class PyTorchModelEngine(ModelEngine):
                     "used_diff": (used_after - used_before) / bytes_to_mb,
                     "non_torch_diff":
                     ((used_after - used_before) -
-                     (reserved_after - reserved_before)) / bytes_to_mb
+                     (reserved_after - reserved_before)) / bytes_to_mb,
+                    "cumulative_allocated":
+                    (mem_after - total_memory_before) / bytes_to_mb
                 }
 
                 # Log per-batch memory usage
@@ -835,6 +840,9 @@ class PyTorchModelEngine(ModelEngine):
                 logger.info(
                     f"  Non-PyTorch memory: {batch_memory_usage[key]['non_torch_diff']:.6f} MB"
                 )
+                logger.info(
+                    f"  Cumulative allocated memory: {batch_memory_usage[key]['cumulative_allocated']:.6f} MB"
+                )
 
         if self._torch_compile_piecewise_cuda_graph and self._torch_compile_enabled:
             piecewise_cuda_graph_num_tokens = sorted(
@@ -865,7 +873,7 @@ class PyTorchModelEngine(ModelEngine):
 
         # Get final memory usage after all CUDA graphs
         total_memory_after, total_reserved_after, total_used_after = get_cuda_graph_memory_usage(
-        )
+            skip_empty_cache=True)
 
         # Log total summary
         logger.info("=" * 60)

@@ -250,7 +250,7 @@ class CUDAGraphRunner:
         # https://pytorch.org/docs/stable/notes/cuda.html#cuda-graph-semantics
         # This also lets us initialize states in the attn_metadata.
         graph = torch.cuda.CUDAGraph()
-        # export TLLM_DUMP_PATH=/scratch_gpu/fork/TensorRT-LLM/cuda_graph_testing_logs_memory_reduction
+        # export TLLM_DUMP_PATH=/scratch_gpu/fork/TensorRT-LLM/cuda_graph_testing_logs_memory_reduction_v3_lite_fp8
         import os
         dump_path = os.environ.get("TLLM_DUMP_PATH", None)
         if dump_path is not None and rank == 0:
