@@ -789,16 +789,21 @@ class PyTorchModelEngine(ModelEngine):
                 key = f"bs={bs}_draft={draft_len}"
                 batch_memory_usage[key] = {
                     "allocated_diff": (mem_before - mem_after) / bytes_to_mb,
+                    "allocated_diff_kb": (mem_before - mem_after),
                     "allocated_diff_rev":
                     (mem_after - mem_before) / bytes_to_mb,
-                    "reserved_diff":
+                    "allocated_diff_rev_kb": (mem_after - mem_before),
+                    "reserved_diff":   
                     (reserved_after - reserved_before) / bytes_to_mb,
+                    "reserved_diff_kb": (reserved_after - reserved_before),
                     "used_diff": (used_after - used_before) / bytes_to_mb,
+                    "used_diff_kb": (used_after - used_before),
                     "non_torch_diff":
                     ((used_after - used_before) -
                      (reserved_after - reserved_before)) / bytes_to_mb,
-                    "cumulative_allocated":
-                    (mem_after - total_memory_before) / bytes_to_mb
+                    "non_torch_diff_kb": ((used_after - used_before) - (reserved_after - reserved_before)),
+                    "cumulative_allocated": (mem_after - total_memory_before) / bytes_to_mb,
+                    "cumulative_allocated_kb": (mem_after - total_memory_before),
                 }
 
                 # Log per-batch memory usage
@@ -806,42 +811,42 @@ class PyTorchModelEngine(ModelEngine):
                     f"CUDA graph memory for batch_size={bs}, draft_len={draft_len}:"
                 )
                 logger.info(
-                    f"  Allocated memory before: {mem_before / bytes_to_mb:.6f} MB"
+                    f"  Allocated memory before: {mem_before / bytes_to_mb:.6f} MB, {mem_before} KB"
                 )
                 logger.info(
-                    f"  Allocated memory after: {mem_after / bytes_to_mb:.6f} MB"
+                    f"  Allocated memory after: {mem_after / bytes_to_mb:.6f} MB, {mem_after} KB"
                 )
                 logger.info(
-                    f"  Reserved memory before: {reserved_before / bytes_to_mb:.6f} MB"
+                    f"  Reserved memory before: {reserved_before / bytes_to_mb:.6f} MB, {reserved_before} KB"
                 )
                 logger.info(
-                    f"  Reserved memory after: {reserved_after / bytes_to_mb:.6f} MB"
+                    f"  Reserved memory after: {reserved_after / bytes_to_mb:.6f} MB, {reserved_after} KB"
                 )
                 logger.info(
-                    f"  Total GPU usage before: {used_before / bytes_to_mb:.6f} MB"
+                    f"  Total GPU usage before: {used_before / bytes_to_mb:.6f} MB, {used_before} KB"
                 )
                 logger.info(
-                    f"  Total GPU usage after: {used_after / bytes_to_mb:.6f} MB"
+                    f"  Total GPU usage after: {used_after / bytes_to_mb:.6f} MB, {used_after} KB"
                 )
                 if bs == cuda_graph_batch_sizes[0]:
                     logger.info(
-                        f"  Allocated memory: {batch_memory_usage[key]['allocated_diff_rev']:.6f} MB"
+                        f"  Allocated memory: {batch_memory_usage[key]['allocated_diff_rev']:.6f} MB, {batch_memory_usage[key]['allocated_diff_rev_kb']} KB"
                     )
                 else:
                     logger.info(
-                        f"  Allocated memory: {batch_memory_usage[key]['allocated_diff']:.6f} MB"
+                        f"  Allocated memory: {batch_memory_usage[key]['allocated_diff']:.6f} MB, {batch_memory_usage[key]['allocated_diff_kb']} KB"
                     )
                 logger.info(
-                    f"  Reserved memory: {batch_memory_usage[key]['reserved_diff']:.6f} MB"
+                    f"  Reserved memory: {batch_memory_usage[key]['reserved_diff']:.6f} MB, {batch_memory_usage[key]['reserved_diff_kb']} KB"
                 )
                 logger.info(
-                    f"  Total GPU usage: {batch_memory_usage[key]['used_diff']:.6f} MB"
+                    f"  Total GPU usage: {batch_memory_usage[key]['used_diff']:.6f} MB, {batch_memory_usage[key]['used_diff_kb']} KB"
                 )
                 logger.info(
-                    f"  Non-PyTorch memory: {batch_memory_usage[key]['non_torch_diff']:.6f} MB"
+                    f"  Non-PyTorch memory: {batch_memory_usage[key]['non_torch_diff']:.6f} MB, {batch_memory_usage[key]['non_torch_diff_kb']} KB"
                 )
                 logger.info(
-                    f"  Cumulative allocated memory: {batch_memory_usage[key]['cumulative_allocated']:.6f} MB"
+                    f"  Cumulative allocated memory: {batch_memory_usage[key]['cumulative_allocated']:.6f} MB, {batch_memory_usage[key]['cumulative_allocated_kb']} KB"
                 )
 
         if self._torch_compile_piecewise_cuda_graph and self._torch_compile_enabled:
@@ -883,19 +888,19 @@ class PyTorchModelEngine(ModelEngine):
         # Log total memory usage
         logger.info("Total memory usage for all CUDA graphs:")
         logger.info(
-            f"  Memory before: {total_memory_before / bytes_to_mb:.2f} MB (allocated), {total_reserved_before / bytes_to_mb:.2f} MB (reserved), {total_used_before / bytes_to_mb:.2f} MB (total GPU)"
+            f"  Memory before: {total_memory_before / bytes_to_mb:.2f} MB (allocated), {total_memory_before} KB (allocated), {total_reserved_before / bytes_to_mb:.2f} MB (reserved), {total_reserved_before} KB (reserved), {total_used_before / bytes_to_mb:.2f} MB (total GPU), {total_used_before} KB (total GPU)"
         )
         logger.info(
-            f"  Memory after: {total_memory_after / bytes_to_mb:.2f} MB (allocated), {total_reserved_after / bytes_to_mb:.2f} MB (reserved), {total_used_after / bytes_to_mb:.2f} MB (total GPU)"
+            f"  Memory after: {total_memory_after / bytes_to_mb:.2f} MB (allocated), {total_memory_after} KB (allocated), {total_reserved_after / bytes_to_mb:.2f} MB (reserved), {total_reserved_after} KB (reserved), {total_used_after / bytes_to_mb:.2f} MB (total GPU), {total_used_after} KB (total GPU)"
         )
         logger.info(
-            f"  CUDA graph reserved memory: {(total_reserved_after - total_reserved_before) / bytes_to_mb:.2f} MB (reserved)"
+            f"  CUDA graph reserved memory: {(total_reserved_after - total_reserved_before) / bytes_to_mb:.2f} MB (reserved), {total_reserved_after - total_reserved_before} KB (reserved)"
         )
         logger.info(
-            f"  CUDA graph allocated memory: {(total_memory_after - total_memory_before) / bytes_to_mb:.2f} MB (allocated)"
+            f"  CUDA graph allocated memory: {(total_memory_after - total_memory_before) / bytes_to_mb:.2f} MB (allocated), {total_memory_after - total_memory_before} KB (allocated)"
         )
         logger.info(
-            f"  CUDA graph non-PyTorch memory: {((total_used_after - total_used_before) - (total_reserved_after - total_reserved_before)) / bytes_to_mb:.2f} MB (non-PyTorch)"
+            f"  CUDA graph non-PyTorch memory: {((total_used_after - total_used_before) - (total_reserved_after - total_reserved_before)) / bytes_to_mb:.2f} MB (non-PyTorch), {((total_used_after - total_used_before) - (total_reserved_after - total_reserved_before))} KB (non-PyTorch)"
         )
         logger.info("=" * 60)
 
@@ -2308,8 +2313,19 @@ class PyTorchModelEngine(ModelEngine):
         with self.cuda_graph_runner.pad_batch(
                 scheduled_requests, resource_manager) as padded_requests:
 
-            maybe_graph, maybe_attn_metadata, maybe_spec_metadata, key = self.cuda_graph_runner.maybe_get_cuda_graph(
-                padded_requests, spec_resource_manager)
+            # Env variable to control whether to skip cuda graph capture and replay
+            # For getting the memory usage without cuda graph capture and replay
+            # export SKIP_CUDA_GRAPH=true
+            skip_cuda_graph = os.environ.get("SKIP_CUDA_GRAPH", "false")
+            if skip_cuda_graph.lower() == "true":
+                logger.info("Skip cuda graph capture and replay")
+                maybe_graph = False
+                maybe_attn_metadata = attn_metadata
+                maybe_spec_metadata = spec_metadata
+                key = None
+            else:
+                maybe_graph, maybe_attn_metadata, maybe_spec_metadata, key = self.cuda_graph_runner.maybe_get_cuda_graph(
+                    padded_requests, spec_resource_manager)
             if maybe_graph:
                 attn_metadata = maybe_attn_metadata
                 spec_metadata = maybe_spec_metadata
