@@ -973,12 +973,22 @@ class PyTorchModelEngine(ModelEngine):
             f"Creating CUDA graph instances for {len(self._cuda_graph_batch_sizes)} batch sizes."
         )
 
-        # Memory tracking: Capture state before CUDA graph creation
-        self.cuda_graph_memory_tracker.capture_memory_snapshot(
-            "before_cuda_graph_warmup", {
-                'batch_sizes': self._cuda_graph_batch_sizes,
-                'num_graphs_to_create': len(self._cuda_graph_batch_sizes)
-            })
+        def get_cuda_graph_memory_usage():
+            torch.cuda.synchronize()
+            for _ in range(3):
+                gc.collect()
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            allocated_memory = torch.cuda.memory_allocated()
+            reserved_memory = torch.cuda.memory_reserved()
+            free, total = torch.cuda.mem_get_info()
+            used = total - free
+            return allocated_memory, reserved_memory, used
+
+        1 << 20
+        allocated_memory_before, reserved_memory_before, used_before = get_cuda_graph_memory_usage(
+        )
 
         # Reverse the order of the cuda graph batch sizes to make smaller batch size graph could reuse larger batch size graph memory
         cuda_graph_batch_sizes = sorted(self._cuda_graph_batch_sizes,
@@ -1048,21 +1058,31 @@ class PyTorchModelEngine(ModelEngine):
         # Set the value back to the original value
         self.enable_spec_decode = self.is_spec_decode
 
-        # Memory tracking: Final state after all CUDA graphs are created
-        self.cuda_graph_memory_tracker.capture_memory_snapshot(
-            "after_cuda_graph_warmup", {
-                'total_graphs_created': len(self.cuda_graph_runner.graphs),
-                'cuda_graph_mem_pool': self._cuda_graph_mem_pool
-            })
-
-        # Log memory summary and CUDA graph properties
-        self.cuda_graph_memory_tracker.log_memory_summary()
-
-        # Extract and log CUDA graph properties
-        if self.cuda_graph_runner.graphs:
-            logger.info("Extracting CUDA graph properties...")
-            self._cuda_graph_properties = log_cuda_graph_properties(
-                self.cuda_graph_runner.graphs)
+        allocated_memory_after, reserved_memory_after, used_after = get_cuda_graph_memory_usage(
+        )
+        logger.info(
+            f"allocated_memory_before: {allocated_memory_before / (1 << 20):.2f} MiB"
+        )
+        logger.info(
+            f"reserved_memory_before: {reserved_memory_before / (1 << 20):.2f} MiB"
+        )
+        logger.info(f"used_before: {used_before / (1 << 20):.2f} MiB")
+        logger.info(
+            f"allocated_memory_after: {allocated_memory_after / (1 << 20):.2f} MiB"
+        )
+        logger.info(
+            f"reserved_memory_after: {reserved_memory_after / (1 << 20):.2f} MiB"
+        )
+        logger.info(f"used_after: {used_after / (1 << 20):.2f} MiB")
+        logger.info(
+            f"CUDA graph memory usage: {(used_after - used_before) / (1 << 20):.2f} MiB"
+        )
+        logger.info(
+            f"CUDA graph allocated memory: {(allocated_memory_after - allocated_memory_before) / (1 << 20):.2f} MiB"
+        )
+        logger.info(
+            f"CUDA graph reserved memory: {(reserved_memory_after - reserved_memory_before) / (1 << 20):.2f} MiB"
+        )
 
     def _set_up_attn_metadata(self, kv_cache_manager: KVCacheManager):
         enable_context_mla_with_cached_kv = is_mla(

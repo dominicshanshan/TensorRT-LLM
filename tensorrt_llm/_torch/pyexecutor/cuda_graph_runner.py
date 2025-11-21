@@ -168,7 +168,8 @@ class CUDAGraphRunner:
                 batch_size: int,
                 forward_fn: Callable,
                 initial_inputs: Dict[str, Any],
-                postprocess_fn: Optional[Callable] = None):
+                postprocess_fn: Optional[Callable] = None,
+                rank: int = 0):
         """Captures the forward pass for a given batch size."""
         key = (batch_size, self.draft_len)
         # [CUDA graph spec decode padding]
@@ -203,6 +204,12 @@ class CUDAGraphRunner:
         # https://pytorch.org/docs/stable/notes/cuda.html#cuda-graph-semantics
         # This also lets us initialize states in the attn_metadata.
         graph = torch.cuda.CUDAGraph()
+        # export TLLM_DUMP_PATH=/scratch_gpu/fork/TensorRT-LLM/cuda_graph_testing_logs_memory_reduction
+        import os
+        dump_path = os.environ.get("TLLM_DUMP_PATH", None)
+        if dump_path is not None and rank == 0:
+            graph.enable_debug_mode()
+
         with with_multi_stream(True), piecewise_cuda_graph(False):
             for _ in range(self.WARMUP_STEPS):
                 forward_fn(capture_inputs)
@@ -216,6 +223,12 @@ class CUDAGraphRunner:
         self.graphs[key] = graph
         self.graph_outputs[key] = make_weak_ref(output)
         self.memory_pool = graph.pool()
+
+        if dump_path is not None and rank == 0:
+            specific_dump_path = f"{dump_path}/cuda_graph_batch_{batch_size}_draft_{self.draft_len}.dot"
+            os.makedirs(dump_path, exist_ok=True)
+            graph.debug_dump(specific_dump_path)
+            print(f"CUDA graph dumped to {specific_dump_path}")
 
     def replay(self, batch_size: int,
                current_inputs: Dict[str, Any]) -> Optional[torch.Tensor]:
