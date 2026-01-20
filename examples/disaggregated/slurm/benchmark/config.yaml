@@ -1,21 +1,21 @@
 # SLURM Configuration
 slurm:
   script_file: "disaggr_torch.slurm"
-  partition: "<partition>"
-  account: "<account>"
-  job_time: "02:00:00"
-  job_name: "<job_name>"
-  extra_args: "" # Cluster specific arguments, e.g. "--gres=gpu:4 --exclude=node1,node2"
+  partition: "batch_long"
+  account: "coreai_comparch_trtllm"
+  job_time: "20:00:00"
+  job_name: "coreai_comparch_trtllm-benchmark"
+  extra_args: "--gres=gpu:4" # Cluster specific arguments, e.g. "--gres=gpu:4 --exclude=node1,node2"
   numa_bind: true # Only enable for GB200 NVL72
 
 # Benchmark Mode
 benchmark:
   mode: "e2e"  # Options: e2e, gen_only
-  use_nv_sa_benchmark: false  # Whether to use NVIDIA SA benchmark script
-  multi_round: 8  # Number of benchmark rounds
-  benchmark_ratio: 0.8  # Benchmark ratio
+  use_nv_sa_benchmark: true  # Whether to use NVIDIA SA benchmark script (uses random data)
+  multi_round: 5  # Number of benchmark rounds
+  benchmark_ratio: 0.0  # Benchmark ratio
   streaming: true  # Enable streaming mode
-  concurrency_list: "16"
+  concurrency_list: "4096,4196,4296,4396,4496,4596,4696"
   input_length: 1024  # Input sequence length
   output_length: 1024  # Output sequence length
   dataset_file: "<dataset_file>"
@@ -27,15 +27,17 @@ hardware:
   num_gen_servers: 1  # Number of generation servers
 
 # Environment Configuration
+# EOS model path:
+# /lustre/fsw/portfolios/coreai/projects/coreai_comparch_trtllm/common/DeepSeek-V3.2-FP4-v2
 environment:
-  container_mount: "<container_mount>"  # Format: path1:path1,path2:path2
-  container_image: "<container_image>"
-  model_path: "<model_path>"
-  trtllm_repo: "<trtllm_repo>"
+  container_mount: "/lustre/fsw/portfolios/coreai/users/dominicw:/lustre/fsw/portfolios/coreai/users/dominicw,/lustre/fsw/portfolios/coreai/projects/coreai_comparch_trtllm/common/DeepSeek-R1-0528-FP4-V2:/DeepSeek-R1-0528-FP4-V2"  # Format: path1:path1,path2:path2
+  container_image: "/lustre/fsw/portfolios/coreai/users/dominicw/trt_llm_aarch64_12rc6_p1.sqsh"
+  model_path: "/DeepSeek-R1-0528-FP4-V2"
+  trtllm_repo: "/lustre/fsw/portfolios/coreai/users/dominicw/disagg_bench/TensorRT-LLM"
   build_wheel: false  # Don't build the wheel when launching multiple jobs
-  trtllm_wheel_path: ""  # Path to pre-built TensorRT-LLM wheel. If provided, install from this wheel instead
-  work_dir: "<full_path_to_work_dir>"
-  worker_env_var: "TLLM_LOG_LEVEL=INFO TRTLLM_SERVER_DISABLE_GC=1 TRTLLM_WORKER_DISABLE_GC=1 TRTLLM_ENABLE_PDL=1 ENROOT_ALLOW_DEV=yes"
+  trtllm_wheel_path: "/lustre/fsw/portfolios/coreai/users/dominicw/disagg_bench/TensorRT-LLM/build/tensorrt_llm-1.2.0rc5-cp312-cp312-linux_aarch64.whl"  # Path to pre-built TensorRT-LLM wheel. If provided, install from this wheel instead
+  work_dir: "/lustre/fsw/portfolios/coreai/users/dominicw/disagg_bench/TensorRT-LLM/examples/disaggregated/slurm/benchmark"
+  worker_env_var: "TLLM_LOG_LEVEL=INFO TRTLLM_SERVER_DISABLE_GC=1 TRTLLM_WORKER_DISABLE_GC=1 TRTLLM_ENABLE_PDL=1 ENROOT_ALLOW_DEV=yes HF_HUB_OFFLINE=1"
   server_env_var: "TRTLLM_SERVER_DISABLE_GC=1"
 
 # Profiling Configuration
@@ -53,54 +55,43 @@ accuracy:
 
 worker_config:
   gen:
+    checkpoint_format: "HF"
     tensor_parallel_size: 8
-    moe_expert_parallel_size: 8
+    moe_expert_parallel_size: 4
     enable_attention_dp: true
     enable_lm_head_tp_in_adp: true
     pipeline_parallel_size: 1
-    max_batch_size: 256
-    max_num_tokens: 512
-    max_seq_len: 2251
+    max_batch_size: 1024
+    max_num_tokens: 8192
+    max_seq_len: 2048
     cuda_graph_config:
       enable_padding: true
       batch_sizes:
-      - 1
-      - 2
-      - 4
-      - 8
-      - 16
-      - 32
-      - 64
-      - 128
-      - 256
-      - 512
-      - 768
       - 1024
-      - 2048
-      - 256
     print_iter_log: true
     trust_remote_code: true
     kv_cache_config:
       enable_block_reuse: false
-      free_gpu_memory_fraction: 0.8
+      free_gpu_memory_fraction: 0.80
       dtype: fp8
     moe_config:
       backend: CUTLASS
       use_low_precision_moe_combine: true
       load_balancer:
-        num_slots: 0
+        num_slots: 256
     cache_transceiver_config:
-      max_tokens_in_buffer: 4608
+      max_tokens_in_buffer: 8448
       backend: DEFAULT
-    stream_interval: 20
-    num_postprocess_workers: 4
+    stream_interval: 100
+    num_postprocess_workers: 8
     speculative_config: # when mtp_size is 0, remove this section.
       decoding_type: MTP
       num_nextn_predict_layers: 1
   ctx:
-    max_batch_size: 4
-    max_num_tokens: 4608
-    max_seq_len: 1227
+    checkpoint_format: "HF"
+    max_batch_size: 8
+    max_num_tokens: 8448
+    max_seq_len: 1044
     tensor_parallel_size: 4
     moe_expert_parallel_size: 4
     enable_attention_dp: true
@@ -109,12 +100,13 @@ worker_config:
     trust_remote_code: true
     cuda_graph_config: null
     disable_overlap_scheduler: true
+    enable_chunked_prefill: true
     kv_cache_config:
       enable_block_reuse: false
-      free_gpu_memory_fraction: 0.85
+      free_gpu_memory_fraction: 0.75
       dtype: fp8
     cache_transceiver_config:
-      max_tokens_in_buffer: 4608
+      max_tokens_in_buffer: 8448
       backend: DEFAULT
     speculative_config: # when mtp_size is 0, remove this section.
       decoding_type: MTP
