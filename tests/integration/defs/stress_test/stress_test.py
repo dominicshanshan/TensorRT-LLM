@@ -349,6 +349,46 @@ def check_server_health(server_url: str,
         return False, f"Unexpected error during health check: {str(e)}"
 
 
+def warmup_inference(server_url: str,
+                     model_name: str,
+                     timeout: float = 300.0,
+                     num_warmup_requests: int = 2) -> bool:
+    """
+    Send a few lightweight completion requests to the server so the inference
+    pipeline (JIT, CUDA graphs, memory pools) is fully warmed up before
+    aiperf begins timing.  The /health endpoint only confirms the HTTP server
+    is up -- the first real inference can be orders of magnitude slower.
+
+    Returns True if warmup succeeded, False otherwise.
+    """
+    endpoint = f"{server_url}/v1/completions"
+    payload = {
+        "model": model_name,
+        "prompt": "Hello",
+        "max_tokens": 8,
+        "temperature": 0.0,
+    }
+    for i in range(num_warmup_requests):
+        try:
+            print_info(
+                f"Sending inference warmup request {i+1}/{num_warmup_requests}..."
+            )
+            resp = requests.post(endpoint, json=payload, timeout=timeout)
+            if resp.status_code == 200:
+                print_info(
+                    f"Warmup request {i+1}/{num_warmup_requests} succeeded")
+            else:
+                print_warning(
+                    f"Warmup request {i+1} returned status {resp.status_code}: "
+                    f"{resp.text[:200]}")
+                return False
+        except requests.RequestException as e:
+            print_warning(f"Warmup request {i+1} failed: {e}")
+            return False
+    print_info("Inference warmup complete")
+    return True
+
+
 def is_port_available(port: int,
                       host: str = "localhost") -> Tuple[bool, Optional[str]]:
     """
@@ -753,6 +793,14 @@ def stress_test(config,
             print_info(
                 f"Server is running with model {model_name}. Starting tests...")
 
+            # Warm up the inference pipeline before benchmarking.
+            # The /health endpoint only confirms the HTTP layer is up; the
+            # first real inference triggers JIT/CUDA-graph compilation that
+            # can take much longer than aiperf's per-request timeout.
+            if not warmup_inference(test_server_config.url, model_name):
+                print_warning("Inference warmup failed -- proceeding anyway, "
+                              "but aiperf may hit startup timeouts")
+
             # Run baseline accuracy test first if enabled
             baseline_accuracy_success = True
             if stress_config and stress_config.enable_accuracy_test:
@@ -852,7 +900,8 @@ def create_aiperf_command(model_name,
                           input_len_std=PerformanceParams.input_len_std,
                           output_len_mean=PerformanceParams.output_len_mean,
                           output_len_std=PerformanceParams.output_len_std,
-                          warmup_request_count=10):
+                          warmup_request_count=10,
+                          request_timeout_seconds=120.0):
     """
     Create a command list for aiperf with standardized parameters.
 
@@ -867,6 +916,7 @@ def create_aiperf_command(model_name,
         output_len_mean: Mean output length
         output_len_std: Standard deviation of output length
         warmup_request_count: Number of warmup requests
+        request_timeout_seconds: Per-request timeout in seconds for aiperf
 
     Returns:
         List of command-line arguments for aiperf
@@ -898,6 +948,8 @@ def create_aiperf_command(model_name,
         str(concurrency),
         "--warmup-request-count",
         str(warmup_request_count),
+        "--request-timeout-seconds",
+        str(request_timeout_seconds),
         # "--verbose",
     ]
 
@@ -1009,6 +1061,12 @@ def run_aiperf_process(cmd,
             raise RuntimeError(
                 "aiperf did not complete normally, will terminate")
     finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=GRACEFUL_TERMINATION_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                cleanup_process_tree(process, has_session=True)
         if process.stdout:
             process.stdout.close()
         if process.stderr:
