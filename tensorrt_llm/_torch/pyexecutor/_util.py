@@ -266,6 +266,15 @@ class KvCacheCreator:
             # Requests cannot share KV cache blocks. Round up to nearest integer multiple of block size.
             num_cache_blocks += (num_req_tokens + self._tokens_per_block -
                                  1) // self._tokens_per_block
+
+        # With ADP enabled, _create_dummy_context_requests produces tp_size
+        # copies so each rank gets work during the estimation warmup. But the
+        # scheduler distributes them evenly (1 per rank), so each rank's KV
+        # cache only needs capacity for its own share, not all of them.
+        if self._mapping.enable_attention_dp and self._mapping.tp_size > 1:
+            num_cache_blocks = (num_cache_blocks + self._mapping.tp_size -
+                                1) // self._mapping.tp_size
+
         # Multiply by beam width, to prevent rescaling of the max_seq_len caused by the influence of beam width during the preparation for kv_cache_estimation
         return num_cache_blocks * self._tokens_per_block * self._dummy_reqs[
             0].sampling_config.beam_width

@@ -323,7 +323,7 @@ class CutlassFusedMoE(MoE):
                             x, self.fc31_input_scale, self.scaling_vector_size,
                             False, False)
                     # Reshape x_sf to 2D for post-quant communication
-                    if x_sf is not None:
+                    if x_sf is not None and x_row > 0:
                         x_sf = x_sf.view((x_row, -1))
                 else:
                     if not isinstance(x, Fp4QuantizedTensor):
@@ -336,7 +336,7 @@ class CutlassFusedMoE(MoE):
                         x, False, alignment=self.quant_method.weight_alignment)
                     # Reshape x_sf to 2D for post-quant communication
                     # x.shape[0] is padded
-                    if x_sf is not None:
+                    if x_sf is not None and x.shape[0] > 0:
                         x_sf = x_sf.view((x.shape[0], -1))
                 else:
                     x, x_sf = torch.ops.trtllm.mxfp8_quantize(
@@ -481,6 +481,16 @@ class CutlassFusedMoE(MoE):
             use_dp_padding: Optional[bool] = None,
             repeating_info: tuple = (True, True),
     ) -> torch.Tensor:
+        # ADP dummy ranks can receive 0-token chunks from the chunked MoE
+        # splitting, but the alltoall C++ kernel requires localNumTokens > 0
+        # (other ranks may still dispatch tokens to this rank's experts).
+        # Pad to 1 dummy token so alltoall proceeds, then trim at the end.
+        _empty_alltoall_pad = (not isinstance(x, Fp4QuantizedTensor)
+                               and x.shape[0] == 0 and self.enable_alltoall)
+        if _empty_alltoall_pad:
+            x = x.new_zeros(1, x.shape[-1])
+            router_logits = router_logits.new_zeros(1, router_logits.shape[-1])
+
         if isinstance(x, Fp4QuantizedTensor):
             assert output_dtype is not None
         else:
@@ -691,6 +701,9 @@ class CutlassFusedMoE(MoE):
                 )
 
         self._load_balancer_done_set_cpu_stage(is_last_call)
+
+        if _empty_alltoall_pad:
+            final_hidden_states = final_hidden_states[:0]
 
         return final_hidden_states
 
