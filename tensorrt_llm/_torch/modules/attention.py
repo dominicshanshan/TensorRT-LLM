@@ -2809,38 +2809,40 @@ class MLA(nn.Module):
 
         attn_output = self.create_output(hidden_states,
                                          attn_metadata.num_contexts)
-        if self.register_to_config:
-            if self.is_dsa:
-                proj_outputs = torch.ops.trtllm.mla_dsa_proj(
-                    hidden_states, position_ids, self.layer_idx_str)
-                q, compressed_kv, k_pe, latent_cache = proj_outputs[:4]
-                indexer_intermediates = proj_outputs[4:]
-                torch.ops.trtllm.mla_dsa_attn_inplace(
-                    q, compressed_kv, k_pe, latent_cache, indexer_intermediates,
-                    position_ids, self.layer_idx_str, attn_output)
+        with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MLA_qkv_proj"):
+            if self.register_to_config:
+                if self.is_dsa:
+                    proj_outputs = torch.ops.trtllm.mla_dsa_proj(
+                        hidden_states, position_ids, self.layer_idx_str)
+                    q, compressed_kv, k_pe, latent_cache = proj_outputs[:4]
+                    indexer_intermediates = proj_outputs[4:]
+                    torch.ops.trtllm.mla_dsa_attn_inplace(
+                        q, compressed_kv, k_pe, latent_cache,
+                        indexer_intermediates, position_ids,
+                        self.layer_idx_str, attn_output)
+                else:
+                    torch.ops.trtllm.mla_custom_op_inplace(
+                        hidden_states, position_ids, self.layer_idx_str,
+                        attn_output, latent_cache_gen)
+            elif self.is_dsa:
+                self.forward_impl_with_dsa(position_ids,
+                                           hidden_states,
+                                           attn_metadata,
+                                           output=attn_output)
             else:
-                torch.ops.trtllm.mla_custom_op_inplace(hidden_states,
-                                                       position_ids,
-                                                       self.layer_idx_str,
-                                                       attn_output,
-                                                       latent_cache_gen)
-        elif self.is_dsa:
-            self.forward_impl_with_dsa(position_ids,
-                                       hidden_states,
-                                       attn_metadata,
-                                       output=attn_output)
-        else:
-            self.forward_impl(position_ids,
-                              hidden_states,
-                              attn_metadata,
-                              output=attn_output,
-                              latent_cache_gen=latent_cache_gen)
+                self.forward_impl(position_ids,
+                                  hidden_states,
+                                  attn_metadata,
+                                  output=attn_output,
+                                  latent_cache_gen=latent_cache_gen)
 
-        attn_output = _helix_cp_output_projection(self.o_proj, attn_output,
-                                                  attn_metadata,
-                                                  all_reduce_params,
-                                                  self.mapping, self.mapping_o,
-                                                  self.layer_idx)
+        with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MLA_o_proj"):
+            attn_output = _helix_cp_output_projection(self.o_proj, attn_output,
+                                                     attn_metadata,
+                                                     all_reduce_params,
+                                                     self.mapping,
+                                                     self.mapping_o,
+                                                     self.layer_idx)
         return attn_output
 
     def resmooth_parameters(self,

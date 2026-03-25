@@ -902,6 +902,7 @@ class Deepseekv3MoE(nn.Module):
         super().__init__()
         config = model_config.pretrained_config
         self.top_k = top_k
+        self.layer_idx = layer_idx
         self.use_dp = model_config.mapping.enable_attention_dp
         self.use_cute_dsl_blockscaling_mm = model_config.use_cute_dsl_blockscaling_mm
         gate_cls = DeepseekV3Gate
@@ -1073,20 +1074,22 @@ class Deepseekv3MoE(nn.Module):
                 hidden_states,
                 (0, 0, 0, max(all_rank_num_tokens) - hidden_states.shape[0]))
 
-        router_logits = self.gate(hidden_states)
+        with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MoE_routing"):
+            router_logits = self.gate(hidden_states)
 
-        routed_output = self.experts(
-            hidden_states_fp4
-            if hidden_states_fp4 is not None else hidden_states,
-            router_logits,
-            do_finalize=do_finalize,
-            output_dtype=hidden_states.dtype,
-            all_rank_num_tokens=all_rank_num_tokens,
-            use_dp_padding=use_dp_padding,
-            **({
-                "alltoall_result_do_sum": False
-            } if isinstance(self.experts, WideEPMoE) else {}),
-        )
+        with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MoE_expert_compute"):
+            routed_output = self.experts(
+                hidden_states_fp4
+                if hidden_states_fp4 is not None else hidden_states,
+                router_logits,
+                do_finalize=do_finalize,
+                output_dtype=hidden_states.dtype,
+                all_rank_num_tokens=all_rank_num_tokens,
+                use_dp_padding=use_dp_padding,
+                **({
+                    "alltoall_result_do_sum": False
+                } if isinstance(self.experts, WideEPMoE) else {}),
+            )
 
         return routed_output
 
@@ -1372,38 +1375,42 @@ class DeepseekV3DecoderLayer(DecoderLayer):
         if residual is None:
             residual = hidden_states
             hidden_states = self.input_layernorm(hidden_states)
-        # Self Attention
-        hidden_states = self.self_attn(
-            position_ids=position_ids,
-            hidden_states=hidden_states,
-            attn_metadata=attn_metadata,
-            all_reduce_params=AllReduceParams(
-                enable_allreduce=not (self.disable_attn_allreduce)),
-            **kwargs,
-        )
-        residual = maybe_slice_for_helix_cp(residual, attn_metadata,
-                                            self.mapping_with_cp,
-                                            self.layer_idx)
+        # Self Attention with NVTX label
+        with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MLA_attention"):
+            hidden_states = self.self_attn(
+                position_ids=position_ids,
+                hidden_states=hidden_states,
+                attn_metadata=attn_metadata,
+                all_reduce_params=AllReduceParams(
+                    enable_allreduce=not (self.disable_attn_allreduce)),
+                **kwargs,
+            )
+
+            residual = maybe_slice_for_helix_cp(residual, attn_metadata,
+                                                self.mapping_with_cp,
+                                                self.layer_idx)
         if isinstance(self.mlp, Deepseekv3MoE):
             if spec_metadata is not None and spec_metadata.is_layer_capture(
                     self.layer_idx):
                 self.fusion_config.POST_MOE_FUSION = False
-            return self.forward_MoE(
-                hidden_states=hidden_states,
-                attn_metadata=attn_metadata,
-                residual=residual,
-                spec_metadata=spec_metadata,
-            )
+            with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MoE"):
+                return self.forward_MoE(
+                    hidden_states=hidden_states,
+                    attn_metadata=attn_metadata,
+                    residual=residual,
+                    spec_metadata=spec_metadata,
+                )
         else:
             if spec_metadata is not None and spec_metadata.is_layer_capture(
                     self.layer_idx):
                 self.fusion_config.POST_MLP_FUSION = False
             assert isinstance(self.mlp, GatedMLP)
-            return self.forward_mlp(
-                hidden_states=hidden_states,
-                residual=residual,
-                spec_metadata=spec_metadata,
-            )
+            with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_dense_MLP"):
+                return self.forward_mlp(
+                    hidden_states=hidden_states,
+                    residual=residual,
+                    spec_metadata=spec_metadata,
+                )
 
     def forward_MoE(
         self,
@@ -1414,15 +1421,16 @@ class DeepseekV3DecoderLayer(DecoderLayer):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         def _run_MoE(hidden_states, hidden_states_fp4, do_finalize):
-            return self.mlp(
-                hidden_states,
-                hidden_states_fp4,
-                all_rank_num_tokens=attn_metadata.all_rank_num_tokens,
-                final_all_reduce_params=AllReduceParams(
-                    enable_allreduce=not (self.fusion_config.POST_MOE_FUSION
-                                          or self.mapping.tp_size == 1)),
-                do_finalize=do_finalize,
-            )
+            with torch.cuda.nvtx.range(f"layer_{self.layer_idx}_MoE_experts"):
+                return self.mlp(
+                    hidden_states,
+                    hidden_states_fp4,
+                    all_rank_num_tokens=attn_metadata.all_rank_num_tokens,
+                    final_all_reduce_params=AllReduceParams(
+                        enable_allreduce=not (self.fusion_config.POST_MOE_FUSION
+                                              or self.mapping.tp_size == 1)),
+                    do_finalize=do_finalize,
+                )
 
         if self.fusion_config.PRE_MOE_FUSION:
             # moe_backend can be either CUTLASS or TRTLLM here
