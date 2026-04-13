@@ -1,0 +1,12 @@
+cuda_graph_config:
+  enable_padding: true
+  batch_sizes:
+  - 512
+
+kv_cache_config:
+  enable_block_reuse: false
+  dtype: fp8
+
+moe_config:
+  backend: CUTLASS
+  use_low_precision_moe_combine: true

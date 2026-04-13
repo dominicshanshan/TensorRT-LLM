@@ -1,0 +1,47 @@
+# SLURM Configuration
+slurm:
+  script_file: "aggregated.slurm"
+  partition: "gb300"
+  account: "coreai_comparch_trtllm"
+  job_time: "5:00:00"
+  job_name: "coreai_comparch_trtllm-agg-benchmark"
+  extra_args: "--gres=gpu:4"
+  set_segment: true
+  numa_bind: true
+
+# Benchmark Configuration
+benchmark:
+  input_length: 4096
+  output_length: 65536
+  num_prompts: 1024
+  max_concurrency: 256
+  streaming: true
+  dataset_name: "random"
+
+# Hardware Configuration
+hardware:
+  gpus_per_node: 4
+
+# Server Configuration
+server:
+  model_path: "/DeepSeek-R1-0528-FP4-V2"
+  tp_size: 4
+  ep_size: 4
+  pp_size: 1
+  max_batch_size: 512
+  max_num_tokens: 8192
+  backend: "pytorch"
+  trust_remote_code: true
+  port: 8000
+  extra_llm_api_options: "extra_llm_api_options.yaml"
+
+# Environment Configuration
+environment:
+  container_mount: "/lustre/fsw/coreai_comparch_trtllm/dominicw/:/lustre/fsw/coreai_comparch_trtllm/dominicw/,/lustre/fsw/coreai_comparch_trtllm/common/DeepSeek-R1-0528-FP4-v2:/DeepSeek-R1-0528-FP4-V2"
+  container_image: "/lustre/fsw/portfolios/coreai/users/dominicw/"
+  trtllm_repo: "/lustre/fsw/coreai_comparch_trtllm/dominicw/TensorRT-LLM"
+  build_wheel: false
+  cuda_architectures: "103-real"
+  trtllm_wheel_path: ""
+  work_dir: "/lustre/fsw/coreai_comparch_trtllm/dominicw/TensorRT-LLM/examples/aggregated/slurm/benchmark"
+  worker_env_var: "TLLM_LOG_LEVEL=INFO HF_HUB_OFFLINE=1 HF_HOME=/tmp/hf_home FLASHINFER_WORKSPACE_BASE=/tmp PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
