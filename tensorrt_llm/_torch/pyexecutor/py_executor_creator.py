@@ -171,6 +171,31 @@ class _ExecutorMemoryMonitor:
                     free_gpu_memory_bytes_pre=free_gpu_memory_bytes_pre,
                     free_gpu_memory_bytes_post=free_gpu_memory_bytes_post,
                 ))
+            logger.info(
+                f"[MemoryMonitor] Created {current_stage.value}: "
+                f"Total GPU memory (GiB): {self._bytes_to_gib(self._total_gpu_memory_bytes):.2f}, "
+                f"Free GPU memory before/after (GiB): "
+                f"{self._bytes_to_gib(free_gpu_memory_bytes_pre):.2f} / "
+                f"{self._bytes_to_gib(free_gpu_memory_bytes_post):.2f}"
+            )
+
+    def log_memory_summary(self):
+        """Log a full memory breakdown of all created components."""
+        if not self._samples:
+            return
+        free_gpu_memory_bytes_now = torch.cuda.mem_get_info()[0]
+        lines = [
+            "[MemoryMonitor] Executor component memory summary:",
+            f"  Total GPU memory (GiB): {self._bytes_to_gib(self._total_gpu_memory_bytes):.2f}",
+            f"  Free GPU memory now (GiB): {self._bytes_to_gib(free_gpu_memory_bytes_now):.2f}",
+            "",
+            "  Components and free GPU memory before/after creation (GiB):",
+            *((f"    {sample.creation_stage.value}: "
+               f"{self._bytes_to_gib(sample.free_gpu_memory_bytes_pre):.2f} / "
+               f"{self._bytes_to_gib(sample.free_gpu_memory_bytes_post):.2f}")
+              for sample in self._samples),
+        ]
+        logger.info("\n".join(lines))
 
 
 def _get_mapping(_mapping: Mapping) -> Mapping:
@@ -804,6 +829,8 @@ def create_py_executor(
 
     if mapping.rank == 0:
         logger.info(f"LLM Args:\n{llm_args}")
+
+    mem_monitor.log_memory_summary()
 
     py_executor.start_worker()
     return py_executor
