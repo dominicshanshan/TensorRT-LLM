@@ -108,7 +108,7 @@ elif [ -d "${trtllm_repo}" ]; then
         if ! srun --container-name=${container_name} \
             --container-mounts=${container_mount} \
             --mpi=pmix --overlap -N 1 --ntasks-per-node=1 \
-            bash -c "cd ${trtllm_repo} && ${build_command}" \
+            bash -c "cd ${trtllm_repo} && rm -rf .venv-* && ${build_command}" \
             &> ${full_logdir}/2_build.log; then
             cleanup_on_failure "TensorRT-LLM build failed. Check ${full_logdir}/2_build.log for details"
         fi
