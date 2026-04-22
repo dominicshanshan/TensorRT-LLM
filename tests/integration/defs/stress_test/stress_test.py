@@ -843,6 +843,14 @@ def stress_test(config,
             os.unlink(extra_llm_options_path)
 
 
+def _get_artifacts_dir() -> str:
+    """Return the absolute path to the artifacts directory that
+    ``extract_stress_test_metrics`` scans, so aiperf writes to the same place
+    regardless of the pytest launch cwd."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(script_dir, "..", "artifacts"))
+
+
 def create_aiperf_command(model_name,
                           model_path,
                           request_count,
@@ -877,6 +885,12 @@ def create_aiperf_command(model_name,
     # scraping it, causing PROFILE_START to exceed the 60s
     # AIPERF_SERVICE_PROFILE_START_TIMEOUT and the benchmark to abort.
     # See ai-dynamo/aiperf#578.
+    #
+    # --output-artifact-dir: pin aiperf's output location to the same
+    # directory that extract_stress_test_metrics() scans. Without this,
+    # aiperf defaults to "./artifacts" relative to the pytest cwd and the
+    # resulting files land outside the directory the stress test expects,
+    # causing STAGE 2 to raise "No profile_export_aiperf.json files found".
     return [
         "aiperf",
         "profile",
@@ -889,6 +903,8 @@ def create_aiperf_command(model_name,
         "-u",
         server_url,
         "--no-server-metrics",
+        "--output-artifact-dir",
+        _get_artifacts_dir(),
         "--random-seed",
         "123",
         "--synthetic-input-tokens-mean",
@@ -1267,11 +1283,13 @@ def extract_stress_test_metrics(artifacts_dir=None, current_model=None):
                             the 'artifacts' directory at the defs level (parent of stress_test)
         current_model (str, optional): If provided, only analyze artifacts for this model
     """
-    # Set default artifacts_dir relative to this script's location
-    # The artifacts are at defs/artifacts/, one level up from stress_test/
+    # Set default artifacts_dir relative to this script's location.
+    # The artifacts live at defs/artifacts/, one level up from stress_test/.
+    # create_aiperf_command() pins aiperf's --output-artifact-dir to the
+    # same path so this directory is always populated regardless of the
+    # pytest launch cwd.
     if artifacts_dir is None:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        artifacts_dir = os.path.join(script_dir, "..", "artifacts")
+        artifacts_dir = _get_artifacts_dir()
 
     # Find all profile_export_aiperf.json files in the artifacts directory
     json_files = glob(os.path.join(artifacts_dir,
