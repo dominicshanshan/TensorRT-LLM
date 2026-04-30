@@ -37,7 +37,7 @@ environment:
   cuda_architectures: "103-real"  # Optional CUDA architectures to build for (e.g. "90-real;100-real"). If empty, builds for all architectures
   trtllm_wheel_path: ""  # Path to pre-built TensorRT-LLM wheel. If provided, install from this wheel instead
   work_dir: "/lustre/fsw/coreai_comparch_trtllm/dominicw/TensorRT-LLM/examples/disaggregated/slurm/benchmark"
-  worker_env_var: "TLLM_LOG_LEVEL=INFO TRTLLM_SERVER_DISABLE_GC=1 TRTLLM_WORKER_DISABLE_GC=1 TRTLLM_ENABLE_PDL=1 ENROOT_ALLOW_DEV=yes NCCL_GRAPH_MIXING_SUPPORT=0 HF_HUB_OFFLINE=1 HF_HOME=/tmp/hf_home FLASHINFER_WORKSPACE_BASE=/tmp PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+  worker_env_var: "TLLM_LOG_LEVEL=INFO TRTLLM_SERVER_DISABLE_GC=1 TRTLLM_WORKER_DISABLE_GC=1 TRTLLM_ENABLE_PDL=1 ENROOT_ALLOW_DEV=yes NCCL_GRAPH_MIXING_SUPPORT=0 HF_HUB_OFFLINE=1 HF_HOME=/tmp/hf_home FLASHINFER_WORKSPACE_BASE=/tmp"
   server_env_var: "TRTLLM_SERVER_DISABLE_GC=1"
 
 # Profiling Configuration
