@@ -12,6 +12,7 @@ gen_profile_range=${6}
 num_ctx_gpus=${7}
 ctx_worker_env_var=${8}
 gen_worker_env_var=${9}
+nsys_extra_args=${10:-""}  # Extra flags appended to `nsys profile ...` (e.g. --cuda-memory-usage=true --nic-metrics=true)
 
 unset UCX_NET_DEVICES
 unset UCX_TLS
@@ -55,7 +56,8 @@ else
     export NSYS_MPI_STORE_TEAMS_PER_RANK=1
     export TLLM_PROFILE_START_STOP=${profile_range}
     echo "nsys is enabled on ${worker_role} ranks, TLLM_PROFILE_START_STOP=${profile_range}"
-    nsys_prefix="nsys profile -o ${nsys_file} -f true -t cuda,nvtx,python-gil -c cudaProfilerApi --cuda-graph-trace node --capture-range-end=stop --gpu-metrics-devices=none"
+    echo "nsys_extra_args: ${nsys_extra_args}"
+    nsys_prefix="nsys profile -o ${nsys_file} -f true -t cuda,nvtx,python-gil -c cudaProfilerApi --cuda-graph-trace node --capture-range-end=stop --gpu-metrics-devices=none ${nsys_extra_args}"
 fi
 
 ${nsys_prefix} ${numa_bind_cmd} trtllm-serve disaggregated_mpi_worker -c ${config_file}

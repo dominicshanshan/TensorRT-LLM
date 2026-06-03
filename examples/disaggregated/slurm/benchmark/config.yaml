@@ -45,6 +45,14 @@ profiling:
   nsys_on: true  # Set to true to enable profiling
   ctx_profile_range: "10-30"  # Set TLLM_PROFILE_START_STOP for ctx workers
   gen_profile_range: "200-250"  # Set TLLM_PROFILE_START_STOP for gen workers
+  # Extra flags appended to the `nsys profile ...` command for every worker.
+  # Useful for adding device/system metrics that help correlate slow iters with
+  # GPU memory pressure or NIC stalls (e.g. UCX KV-cache transfer).
+  # Examples:
+  #   "--cuda-memory-usage=true --nic-metrics=true"
+  #   "--cuda-memory-usage=true --nic-metrics=true --gpuctxsw=true"
+  # Leave empty to keep the default nsys command untouched.
+  nsys_extra_args: "--cuda-memory-usage=true --nic-metrics=true"
 
 # Accuracy Configuration
 accuracy:
@@ -123,8 +131,9 @@ worker_config:
       free_gpu_memory_fraction: 0.55
       dtype: fp8
     cache_transceiver_config:
-      max_tokens_in_buffer: 131072
-      backend: UCX # DWDP only support UCX backend
+      transceiver_runtime: PYTHON
+      max_tokens_in_buffer: 131072 # If is PYTHON runtime, this value is ignored
+      backend: UCX # DWDP only support UCX backend, Chuang suggest to try NIXL
     # speculative_config: # when mtp_size is 0, remove this section.
     #   decoding_type: MTP
     #   num_nextn_predict_layers: 1

@@ -124,6 +124,7 @@ def submit_dwdp_job(config, log_dir, dry_run):
     profiling_config.setdefault("nsys_on", False)
     profiling_config.setdefault("ctx_profile_range", "10-30")
     profiling_config.setdefault("gen_profile_range", "200-250")
+    profiling_config.setdefault("nsys_extra_args", "")
 
     ctx_num = hw_config["num_ctx_servers"]
     gen_num = hw_config["num_gen_servers"]
@@ -275,6 +276,7 @@ def submit_dwdp_job(config, log_dir, dry_run):
         str(num_ctx_gpus),
         f"'{dwdp_ctx_worker_env_var}'",
         f"'{dwdp_gen_worker_env_var}'",
+        f"'{profiling_config['nsys_extra_args']}'",
         f"&> {log_dir}/3_output_workers.log &",
     ]
     start_server_cmds.append(" ".join(cmd))
