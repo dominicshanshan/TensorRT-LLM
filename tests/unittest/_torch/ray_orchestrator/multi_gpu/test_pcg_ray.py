@@ -27,6 +27,8 @@ test_build_custom_passes_ar_fusions_registered covers Fix 1 in isolation.
 test_pcg_ray_correctness covers Fixes 1+2+3 end-to-end.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -34,7 +36,6 @@ from utils.llm_data import llm_models_root
 
 from tensorrt_llm import LLM
 from tensorrt_llm.llmapi import KvCacheConfig, SamplingParams, TorchCompileConfig
-from tensorrt_llm.mapping import Mapping
 
 # ---------------------------------------------------------------------------
 # Fix 1 unit test — no GPU required, pure Python / pattern-matcher logic.
@@ -50,7 +51,12 @@ def test_build_custom_passes_ar_fusions_registered():
     """
     from tensorrt_llm._torch.compilation.backend import Backend
 
-    mapping = Mapping(world_size=2, tp_size=2, rank=0)
+    # Use a plain namespace rather than Mapping(): under TLLM_DISABLE_MPI=1
+    # (set by the conftest) Mapping() returns a DeviceMeshTopologyImpl whose
+    # tp_group property calls build_mesh() → requires torch.distributed to be
+    # initialised.  build_custom_passes only accesses mapping.tp_size and
+    # mapping.tp_group, so a lightweight stub is sufficient here.
+    mapping = SimpleNamespace(tp_size=2, tp_group=[0, 1])
     passes = Backend.build_custom_passes(enable_userbuffers=False,
                                          mapping=mapping)
     pass_names = [p.pass_name for p in passes]

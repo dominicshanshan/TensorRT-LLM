@@ -380,7 +380,9 @@ class BaseLLM:
             )
             # _owns_mpi_session is already True here: this branch only runs
             # when no external session was supplied.
-            if not self.mpi_session:
+            # Ray executor manages its own GPU workers via Ray actors and does
+            # not use MPI process spawning; skip MpiPoolSession creation.
+            if not self.mpi_session and not mpi_disabled():
                 mpi_process_pre_spawned: bool = get_spawn_proxy_process_env()
                 if not mpi_process_pre_spawned:
                     logger_debug("LLM create MpiPoolSession\n", "yellow")
