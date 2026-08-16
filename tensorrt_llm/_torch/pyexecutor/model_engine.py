@@ -52,6 +52,7 @@ from ..compilation.backend import Backend
 from ..compilation.utils import capture_piecewise_cuda_graph
 from ..distributed import Distributed
 from ..distributed.communicator import init_pp_comm
+from ..distributed.ops import MNNVLAllReduce
 from ..expert_statistic import ExpertStatistic
 from ..memory_buffer_utils import clear_memory_buffers, with_shared_pool
 from ..metadata import KVCacheParams
@@ -677,6 +678,20 @@ class PyTorchModelEngine(ModelEngine):
                 and self._init_userbuffers(self.model.config.hidden_size))
             if self._torch_compile_enabled:
                 set_torch_compiling(True)
+                # torch.compile traces AllReduce.forward, whose lazy MNNVL
+                # workspace rescale cannot allocate inside the traced region —
+                # grow the workspaces to the engine maximum up front.
+                num_mnnvl_allreduces = 0
+                for module in self.model.modules():
+                    if isinstance(module, MNNVLAllReduce):
+                        module.prescale_workspace(self.max_num_tokens,
+                                                  self.model.config.hidden_size)
+                        num_mnnvl_allreduces += 1
+                if num_mnnvl_allreduces:
+                    logger.info(f"Pre-scaled the MNNVL allreduce workspace for "
+                                f"{num_mnnvl_allreduces} modules to cover "
+                                f"max_num_tokens={self.max_num_tokens} before "
+                                "torch.compile.")
                 use_ub = not use_ub_for_nccl and (
                     torch_compile_enable_userbuffers
                     and self._init_userbuffers(self.model.config.hidden_size))

@@ -2311,8 +2311,13 @@ TRTLLM_NAMESPACE_END
 TORCH_LIBRARY_FRAGMENT(trtllm, m)
 {
     m.def(
+        // comm_buffer (like buffer_flags and allreduce's workspace) is opaque
+        // communication scratch: it is mutated by the kernel but deliberately
+        // not alias-annotated, since AOT functionalization rejects non-ATen
+        // ops with alias annotations (needed for torch.compile / piecewise
+        // CUDA graphs). Ordering comes from the input/output data deps.
         "mnnvl_fusion_allreduce(Tensor input, Tensor? gamma, Tensor? residual, "
-        "float? epsilon, Tensor(a!) comm_buffer, Tensor buffer_flags, bool rmsnorm_fusion, "
+        "float? epsilon, Tensor comm_buffer, Tensor buffer_flags, bool rmsnorm_fusion, "
         "Tensor? scale=None, int fusion_op=0) -> "
         "Tensor[]");
     m.def(
