@@ -18,9 +18,9 @@ import torch._dynamo.config
 
 import tensorrt_llm.bindings.internal.userbuffers as ub
 from tensorrt_llm._torch.utils import torch_multi_arange
-from tensorrt_llm._utils import (is_trace_enabled, maybe_pin_memory, nvtx_range,
-                                 prefer_pinned, release_gc, torch_dtype_to_str,
-                                 trace_func)
+from tensorrt_llm._utils import (is_trace_enabled, maybe_pin_memory,
+                                 mpi_disabled, nvtx_range, prefer_pinned,
+                                 release_gc, torch_dtype_to_str, trace_func)
 from tensorrt_llm.bindings.internal import \
     batch_manager as batch_manager_bindings
 from tensorrt_llm.bindings.internal.runtime import TaskLayerModuleConfig
@@ -7831,6 +7831,18 @@ class PyTorchModelEngine(ModelEngine):
 
     def _init_userbuffers(self, hidden_size):
         if self.mapping.tp_size <= 1 or self.mapping.pp_size > 1:
+            return False
+
+        # The userbuffers bootstrap exchanges CUDA memory handles over raw
+        # MPI_COMM_WORLD collectives (userbuffers-host.cpp). Under non-MPI
+        # orchestrators (Ray sets TLLM_DISABLE_MPI) every worker holds a
+        # 1-rank MPI world, so importer ranks would receive uninitialized
+        # bytes instead of peer handles and crash in
+        # cuMemImportFromShareableHandle with 'operation not supported'.
+        if mpi_disabled():
+            logger.info(
+                "Disabling userbuffers: its bootstrap requires MPI, which is "
+                "disabled under this orchestrator.")
             return False
 
         # Disable UB for unsupported platforms
