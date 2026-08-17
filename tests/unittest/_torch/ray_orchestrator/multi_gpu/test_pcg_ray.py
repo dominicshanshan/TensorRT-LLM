@@ -32,6 +32,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+try:
+    import ray
+except ModuleNotFoundError:
+    from tensorrt_llm import ray_stub as ray
+
 from utils.llm_data import llm_models_root
 
 from tensorrt_llm import LLM
