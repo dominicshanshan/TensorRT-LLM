@@ -85,7 +85,7 @@ _SAMPLING = SamplingParams(max_tokens=32, temperature=0.0, top_p=1.0)
 _CAPTURE_NUM_TOKENS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
 
 
-def _make_llm(torch_compile_config=None, allreduce_strategy="NCCL"):
+def _make_llm(torch_compile_config=None, allreduce_strategy="AUTO"):
     return LLM(
         model=str(llm_models_root() / _MODEL),
         backend="pytorch",
@@ -106,22 +106,27 @@ def _generate(llm):
 
 @pytest.mark.gpu2
 def test_pcg_ray_correctness():
-    """PCG under Ray must produce token-identical output to the eager baseline.
+    """PCG + MNNVL AllReduce under Ray must produce token-identical output to
+    the eager baseline.
+
+    Both runs use allreduce_strategy=AUTO so MNNVL is selected on GB200 NVL72
+    nodes (the cherry-picked PgMcastGroupComm commit enables MNNVL init via
+    torch.distributed ProcessGroup instead of MPI).  Comparing MNNVL-eager
+    vs MNNVL-PCG gives a clean token-level check: same hardware path, same
+    numerical behaviour, only the graph capture layer differs.
 
     Validates Fix 1 (AR fusion patterns registered) and Fix 2 (fullgraph
-    traces without hitting @compiler.disable'd properties).  Both LLM instances
-    use allreduce_strategy=NCCL to keep the allreduce kernel identical between
-    eager and compiled paths, ensuring a clean token-level comparison.
+    traces without hitting @compiler.disable'd properties).
     """
-    # Eager baseline — no torch.compile, plain NCCL allreduce.
-    llm_base = _make_llm(torch_compile_config=None, allreduce_strategy="NCCL")
+    # Eager baseline — no torch.compile, MNNVL allreduce via AUTO.
+    llm_base = _make_llm(torch_compile_config=None, allreduce_strategy="AUTO")
     try:
         base_tokens = _generate(llm_base)
     finally:
         del llm_base
         torch.cuda.empty_cache()
 
-    # PCG path — enable_fullgraph + piecewise CUDA graph, UB disabled.
+    # PCG + MNNVL path — the target deployment configuration on GB200 NVL72.
     llm_pcg = _make_llm(
         torch_compile_config=TorchCompileConfig(
             enable_fullgraph=True,
@@ -129,7 +134,7 @@ def test_pcg_ray_correctness():
             enable_userbuffers=False,
             capture_num_tokens=_CAPTURE_NUM_TOKENS,
         ),
-        allreduce_strategy="NCCL",
+        allreduce_strategy="AUTO",
     )
     try:
         pcg_tokens = _generate(llm_pcg)
@@ -148,10 +153,11 @@ def test_pcg_ray_ub_true_no_crash():
     """enable_userbuffers=True must not crash under Ray (Fix 3).
 
     The UB C++ bootstrap (MPI-only) is skipped by the mpi_disabled() guard
-    in _init_userbuffers; the LLM degrades gracefully to UB=false and should
-    produce the same tokens as the explicit UB=false run.
+    in _init_userbuffers; the LLM degrades gracefully to UB=false.  With
+    allreduce_strategy=AUTO, MNNVL provides the NVSwitch fused kernel path
+    instead, and output must be identical to the explicit UB=false reference.
     """
-    # Reference: PCG with explicit UB=false.
+    # Reference: PCG + MNNVL with explicit UB=false.
     llm_ref = _make_llm(
         torch_compile_config=TorchCompileConfig(
             enable_fullgraph=True,
@@ -159,7 +165,7 @@ def test_pcg_ray_ub_true_no_crash():
             enable_userbuffers=False,
             capture_num_tokens=_CAPTURE_NUM_TOKENS,
         ),
-        allreduce_strategy="NCCL",
+        allreduce_strategy="AUTO",
     )
     try:
         ref_tokens = _generate(llm_ref)
@@ -167,7 +173,7 @@ def test_pcg_ray_ub_true_no_crash():
         del llm_ref
         torch.cuda.empty_cache()
 
-    # UB=True — should degrade silently and produce identical output.
+    # UB=True — bootstrap skipped, degrades to UB=false, MNNVL still active.
     llm_ub = _make_llm(
         torch_compile_config=TorchCompileConfig(
             enable_fullgraph=True,
@@ -175,7 +181,7 @@ def test_pcg_ray_ub_true_no_crash():
             enable_userbuffers=True,  # Fix 3: must not crash
             capture_num_tokens=_CAPTURE_NUM_TOKENS,
         ),
-        allreduce_strategy="NCCL",
+        allreduce_strategy="AUTO",
     )
     try:
         ub_tokens = _generate(llm_ub)
