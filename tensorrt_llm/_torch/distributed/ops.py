@@ -834,16 +834,6 @@ class AllReduce(nn.Module):
 
         self.all_reduce_op = torch.ops.trtllm.allreduce_pg if self._disable_mpi else torch.ops.trtllm.allreduce
 
-        # Pre-cache at init time so forward() never calls the @torch.compiler.disable'd
-        # _get_mesh_dim_by_name during fullgraph trace (Ray executor path).
-        # torch.distributed is initialised before setup_engine(), so DeviceMesh can be
-        # built here safely.
-        self._tp_group_cached = None
-        self._pg_boxed_cached = None
-        if self._disable_mpi and self.mapping.tp_size > 1:
-            self._tp_group_cached = list(self.mapping.tp_group)
-            self._pg_boxed_cached = self.mapping.tp_group_pg.boxed()
-
         # Propagate model-level prealloc config to AllReduceRunner once per
         # process.  extra_attrs is only active during model __init__, so we
         # read it here and stash the values as class-level attributes that
@@ -1021,10 +1011,12 @@ class AllReduce(nn.Module):
 
         additional_args = {}
         if self._disable_mpi:
-            assert self._pg_boxed_cached is not None, "TP ProcessGroup not initialised"
+            # Get ProcessGroup from mapping
+            pg = self.mapping.tp_group_pg
+            assert pg is not None, "TP ProcessGroup not initialised"
             additional_args = {
                 "rank": torch.distributed.get_rank(),
-                "pg": self._pg_boxed_cached,
+                "pg": pg.boxed(),
             }
 
         # In case that AutoTuner brings potential perf regression
@@ -1073,8 +1065,7 @@ class AllReduce(nn.Module):
                 scale=all_reduce_params.scale,
                 bias=all_reduce_params.bias,
                 workspace=self.workspace,
-                group=self._tp_group_cached
-                if self._disable_mpi else self.mapping.tp_group,
+                group=self.mapping.tp_group,
                 strategy=allreduce_strategy,
                 op=all_reduce_params.fusion_op,
                 eps=all_reduce_params.eps,

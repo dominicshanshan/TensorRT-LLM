@@ -18,9 +18,9 @@ import torch._dynamo.config
 
 import tensorrt_llm.bindings.internal.userbuffers as ub
 from tensorrt_llm._torch.utils import torch_multi_arange
-from tensorrt_llm._utils import (is_trace_enabled, maybe_pin_memory, mpi_disabled,
-                                 nvtx_range, prefer_pinned, release_gc,
-                                 torch_dtype_to_str, trace_func)
+from tensorrt_llm._utils import (is_trace_enabled, maybe_pin_memory, nvtx_range,
+                                 prefer_pinned, release_gc, torch_dtype_to_str,
+                                 trace_func)
 from tensorrt_llm.bindings.internal import \
     batch_manager as batch_manager_bindings
 from tensorrt_llm.bindings.internal.runtime import TaskLayerModuleConfig
@@ -7831,12 +7831,6 @@ class PyTorchModelEngine(ModelEngine):
 
     def _init_userbuffers(self, hidden_size):
         if self.mapping.tp_size <= 1 or self.mapping.pp_size > 1:
-            return False
-
-        # UB bootstrap (create_communicator_grouped2) uses MPI_COMM_WORLD for fabric
-        # handle exchange and fails under Ray where each actor is a size-1 MPI singleton.
-        # Degrade gracefully — MNNVL AllReduce provides the NVSwitch fused kernel path.
-        if mpi_disabled():
             return False
 
         # Disable UB for unsupported platforms

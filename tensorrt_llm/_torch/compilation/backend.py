@@ -81,9 +81,10 @@ class Backend:
 
     @classmethod
     def build_custom_passes(cls, enable_userbuffers, mapping: Mapping):
+        world_size = tensorrt_llm.mpi_world_size()
         # Really naive pass manager here
         custom_passes = [PatternMatcherPass("add_norm", MATCHER_SUBSYSTEM)]
-        if mapping.tp_size > 1:
+        if world_size > 1:
             # Currently torch compile cannot work properly with lamport fusion kernel
             # TO-DO: Fix this issue
             os.environ["DISABLE_LAMPORT_REDUCE_NORM_FUSION"] = "1"
