@@ -52,7 +52,7 @@ from ..compilation.backend import Backend
 from ..compilation.utils import capture_piecewise_cuda_graph
 from ..distributed import Distributed
 from ..distributed.communicator import init_pp_comm
-from ..distributed.ops import MNNVLAllReduce
+from ..distributed.ops import AllReduce, MNNVLAllReduce
 from ..expert_statistic import ExpertStatistic
 from ..memory_buffer_utils import clear_memory_buffers, with_shared_pool
 from ..metadata import KVCacheParams
@@ -693,11 +693,17 @@ class PyTorchModelEngine(ModelEngine):
                 # torch.compile traces AllReduce.forward, whose lazy MNNVL
                 # workspace rescale cannot allocate inside the traced region —
                 # grow the workspaces to the engine maximum up front.
+                # MNNVLAllReduce is stored as a plain Python attribute
+                # (self.mnnvl_allreduce) on AllReduce, not as a registered
+                # nn.Module submodule, so model.modules() never finds it.
+                # Iterate AllReduce instances and prescale through the attribute.
                 num_mnnvl_allreduces = 0
                 for module in self.model.modules():
-                    if isinstance(module, MNNVLAllReduce):
-                        module.prescale_workspace(self.max_num_tokens,
-                                                  self.model.config.hidden_size)
+                    if isinstance(module, AllReduce) and \
+                            module.mnnvl_allreduce is not None:
+                        module.mnnvl_allreduce.prescale_workspace(
+                            self.max_num_tokens,
+                            self.model.config.hidden_size)
                         num_mnnvl_allreduces += 1
                 if num_mnnvl_allreduces:
                     logger.info(f"Pre-scaled the MNNVL allreduce workspace for "
