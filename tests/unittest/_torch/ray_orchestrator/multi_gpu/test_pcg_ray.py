@@ -27,7 +27,13 @@ test_build_custom_passes_ar_fusions_registered covers Fix 1 in isolation.
 test_pcg_ray_correctness covers Fixes 1+2+3 end-to-end.
 """
 
+import os
 from types import SimpleNamespace
+
+# Force MNNVL allreduce on single-node CI hardware (where is_multi_node() is
+# False for TP=2). On multi-node NVL72 (the production target) MNNVL
+# initialises naturally; setdefault makes this a no-op there.
+os.environ.setdefault("TLLM_TEST_MNNVL", "1")
 
 import pytest
 import torch
