@@ -201,6 +201,12 @@ def inplace_info():
         "gdn_custom_op_inplace": {
             1: "output"
         },
+        # Registered lazily: the op only exists once mamba2_mixer is imported
+        # (Mamba2/NemotronH family). Void boundary op mutating ssm_out:
+        # auto_functionalized returns (None, ssm_out), hence index 1.
+        "mamba2_custom_op_inplace": {
+            1: "ssm_out"
+        },
         "minimax_m3_attn_custom_op_inplace": {
             1: "output"
         },
