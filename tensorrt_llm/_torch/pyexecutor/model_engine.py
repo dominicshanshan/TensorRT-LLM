@@ -52,7 +52,7 @@ from ..attention.backends.vanilla import VanillaAttentionMetadata
 from ..autotuner import AutoTuner, autotune
 from ..compilation.backend import Backend
 from ..compilation.utils import capture_piecewise_cuda_graph
-from ..distributed import Distributed
+from ..distributed import AllReduce, Distributed
 from ..distributed.communicator import init_pp_comm
 from ..memory_buffer_utils import clear_memory_buffers, with_shared_pool
 from ..metadata import KVCacheParams
@@ -770,6 +770,30 @@ class PyTorchModelEngine(ModelEngine):
             use_ub_for_nccl = (
                 self.llm_args.allreduce_strategy == "NCCL_SYMMETRIC"
                 and self._init_userbuffers(self.model.config.hidden_size))
+            if (not self._torch_compile_enabled
+                    and self.prefill_cuda_graph_backend
+                    == PrefillCudaGraphBackend.BREAKABLE):
+                # Breakable prefill CUDA graphs capture MNNVL allreduce
+                # kernels at warmup; a later on-demand workspace grow frees
+                # the captured lamport buffers (see
+                # get_or_scale_allreduce_mnnvl_workspace: "captured graphs
+                # holding freed buffer pointers") and replays then spin on
+                # dangling pointers — observed as a PyExecutor hang on the
+                # first prefill larger than the warmup-time workspace.
+                # Pre-grow to the engine maximum, same as the torch.compile
+                # path below.
+                num_mnnvl_allreduces = 0
+                for module in self.model.modules():
+                    if isinstance(module, AllReduce) and \
+                            module.mnnvl_allreduce is not None:
+                        module.mnnvl_allreduce.prescale_workspace(
+                            self.max_num_tokens, self.model.config.hidden_size)
+                        num_mnnvl_allreduces += 1
+                if num_mnnvl_allreduces:
+                    logger.info(f"Pre-scaled the MNNVL allreduce workspace for "
+                                f"{num_mnnvl_allreduces} modules to cover "
+                                f"max_num_tokens={self.max_num_tokens} before "
+                                "breakable prefill CUDA graph capture.")
             if self._torch_compile_enabled:
                 set_torch_compiling(True)
                 use_ub = not use_ub_for_nccl and (
