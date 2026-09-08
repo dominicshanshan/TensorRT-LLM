@@ -708,6 +708,28 @@ class MNNVLAllReduce(nn.Module):
                 num_tokens / group_size) * group_size * hidden_dim * elem_size
         return workspace_size
 
+    def prescale_workspace(self, max_num_tokens: int, hidden_dim: int) -> None:
+        """Grow the lamport workspace to cover the largest shard forward() can see.
+
+        forward() lazily rescales the workspace, which allocates multicast
+        memory and synchronizes the device — illegal inside a dynamo-traced
+        region. Engines that torch.compile the model must call this after the
+        model is built and before the first compiled forward so the traced
+        path is a pure lookup.
+        """
+        # One-shot calls never need more than the threshold bytes, so together
+        # with the two-shot size at max_num_tokens this covers every call.
+        workspace_size_bytes = max(
+            self.get_required_workspace_size(max_num_tokens, hidden_dim,
+                                             self.mapping.tp_size, self.dtype),
+            _MNNVL_ONE_SHOT_THRESHOLD_BYTES)
+        # forward() rejects >= uint32 sizes before touching the workspace, so
+        # larger calls fall back to other strategies and need no headroom here.
+        uint32_aligned_max = (2**32 - 1) // (8 << 20) * (8 << 20)
+        workspace_size_bytes = min(workspace_size_bytes, uint32_aligned_max)
+        get_or_scale_allreduce_mnnvl_workspace(
+            self.mapping, self.dtype, buffer_size_bytes=workspace_size_bytes)
+
     def checkpoint_prepare(self) -> None:
         """Collectively detach handles after external global quiescence.
 
