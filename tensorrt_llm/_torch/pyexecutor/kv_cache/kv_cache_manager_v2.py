@@ -603,6 +603,10 @@ def _get_single_swa_pool_slot_bytes(
     return sum(layer_sizes) * int(tokens_per_block)
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _resolve_v2_max_attention_window_vec(
     max_attention_window_vec: Optional[Sequence[int]],
     max_seq_len: int,
@@ -1867,6 +1871,13 @@ class KVCacheManagerV2(BaseResourceManager):
         # so the latest width in _allocated_draft_lens belongs to step N+1;
         # update_resources must rewind step N by the width step N was given.
         self._inflight_draft_lens: dict[int, list[int]] = {}
+        # Lazy per-step history updates (TRTLLM_KV_V2_LAZY_HISTORY_RESIZE=1): a generation step
+        # that keeps a request's capacity only advances its history by the tokens just accepted,
+        # and everything the core does with the history (block commit, stale-window unlock) is
+        # block-granular, so the per-request resize() round trip is skipped until the history
+        # crosses a block boundary, the capacity changes, or the request ends. Off by default.
+        self._lazy_history_resize = _env_flag("TRTLLM_KV_V2_LAZY_HISTORY_RESIZE")
+        self._last_history_resize: dict[int, int] = {}
         # Defensive cap for get_num_available_tokens: when host cache is
         # enabled, clamp_max_seq_len_for_mem may return a value that spans
         # both GPU and host tiers.  Storing the explicit max_tokens (if set)
@@ -5730,6 +5741,7 @@ class KVCacheManagerV2(BaseResourceManager):
             self.conversation_manager.finish_request(request)
         self._allocated_draft_lens.pop(request.py_request_id, None)
         self._inflight_draft_lens.pop(request.py_request_id, None)
+        getattr(self, "_last_history_resize", {}).pop(request.py_request_id, None)
         self._request_stats_enabled_ids.discard(request.py_request_id)
         # The next owner of these pages fills them again; keeping the set would
         # both leak and let a recycled page skip its fill.
@@ -6509,6 +6521,12 @@ class KVCacheManagerV2(BaseResourceManager):
                 if self.kv_compression_manages_history or self._has_cp_helix
                 else req.max_beam_num_tokens - 1
             )
+            lazy_history = getattr(self, "_lazy_history_resize", False)
+            if lazy_history and self._history_resize_can_wait(
+                req, kv_cache, new_capacity, history_length
+            ):
+                self._allocated_draft_lens.pop(req.py_request_id, None)
+                continue
             success = kv_cache.resize(new_capacity, history_length)
             if not success:
                 raise ValueError(
@@ -6519,7 +6537,25 @@ class KVCacheManagerV2(BaseResourceManager):
             # Inline check: without a lender this per-request hot path makes no extra call.
             if new_capacity is not None and self._sharing is not None:
                 self._after_shrink(req.py_request_id, kv_cache)
+            if lazy_history and history_length is not None:
+                self._last_history_resize[req.py_request_id] = history_length
             self._allocated_draft_lens.pop(req.py_request_id, None)
+
+    def _history_resize_can_wait(self, req, kv_cache, new_capacity, history_length) -> bool:
+        """Whether this step's resize() would only move the history within the block it was last
+        set in. The core's history consumers are block-granular, so that update can wait for the
+        next block boundary; a capacity change, a finishing request, or the first update after a
+        capacity-setting path (no record) must go through."""
+        if history_length is None:
+            return new_capacity is None or new_capacity == kv_cache.capacity
+        if new_capacity is not None and new_capacity != kv_cache.capacity:
+            return False
+        if req.state != LlmRequestState.GENERATION_IN_PROGRESS:
+            return False
+        last = self._last_history_resize.get(req.py_request_id)
+        if last is None or history_length < last:
+            return False
+        return history_length // self.tokens_per_block == last // self.tokens_per_block
 
     def copy_batch_block_offsets(
         self,
