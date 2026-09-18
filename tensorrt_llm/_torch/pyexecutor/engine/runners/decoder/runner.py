@@ -1780,6 +1780,17 @@ class DecoderRunner(ScheduledModelRunner):
            ``_state_passing_fwd_kernel``, ``_chunk_scan_fwd_kernel``, and
            ``_chunk_state_varlen_kernel``.
 
+        Additionally (gated by ``TLLM_GDN_PREFILL_FAMILY_WARMUP``, default on),
+        covers the remaining Triton int-specialization families of the GDN
+        prefill elementwise kernels (``fuse_elementwise_ops.py``): Triton
+        specializes int args (packed prefill token count and the strides equal
+        to it) into ``==1`` / ``%16==0`` / other families, and
+        ``_fused_gdn_post_conv`` forks on the ``HAS_DECODE`` constexpr. The
+        two base shapes only ever compile the (``%16==0``,
+        ``HAS_DECODE=False``) family, so the first mixed ctx+gen batch or
+        non-16-aligned context length otherwise JIT-compiles mid-serving
+        (~0.2-1.5 s, lock-stepped across ranks under SPMD).
+
         Runs regardless of ``enable_autotuner``. Wraps in ``autotune()`` when
         the autotuner is enabled so op-level (M,N,K) caches also get primed
         for these shapes. Set ``TLLM_MAMBA_MULTISEQ_WARMUP=0`` to disable.
@@ -1839,6 +1850,57 @@ class DecoderRunner(ScheduledModelRunner):
             (capped_num_tokens, 0, False, False, False),
             (capped_num_tokens, 0, False, True, True),
         ]
+
+        # Extra shapes covering the remaining GDN prefill Triton
+        # specialization families (see docstring). Context-token counts assume
+        # capped_num_tokens % 16 == 0 (WARMUP_TOKEN_CAP is 16-aligned; only a
+        # near-exhausted KV pool breaks this, degrading a missed family to
+        # lazy compilation, i.e. the pre-fix behavior). The mixed ctx+gen
+        # entries derive their context token count as
+        # num_tokens - num_gen_requests * (1 + max_total_draft_tokens); with
+        # speculative decoding the "%16!=0" entry may land on an aligned
+        # count for some draft lengths — acceptable, since the spec-dec
+        # target-verify kernel variants are not covered here anyway.
+        # Set TLLM_GDN_PREFILL_FAMILY_WARMUP=0 to disable.
+        if (
+            os.environ.get("TLLM_GDN_PREFILL_FAMILY_WARMUP", "1") == "1"
+            and capped_num_tokens >= 32
+        ):
+            mamba_warmup_shapes += [
+                # Prefill %16!=0 family, HAS_DECODE=False.
+                (capped_num_tokens - 4, 0, False, False, False),
+                # Mixed ctx+gen (HAS_DECODE=True), ctx tokens %16==0.
+                (capped_num_tokens, 16, False, False, False),
+                # Mixed ctx+gen (HAS_DECODE=True), ctx tokens %16!=0.
+                (capped_num_tokens - 4, 2, False, False, False),
+                # ==1 specialization (1-token context chunk remainder).
+                (1, 0, False, False, False),
+            ]
+            # The two mixed entries above sample only the (%16==0, %16==0)
+            # and (other, other) diagonal of the Triton specialization key
+            # class(ctx_tokens) x class(gen_tokens), class in {==1, %16==0,
+            # other} — the first serving batch of each remaining combination
+            # JIT-compiles mid-serving (~230 ms, in rank lockstep). Cover the
+            # cross-terms, plus the 1-token context chunk remainder alongside
+            # gens (reachable with chunked prefill). Gen token count is
+            # num_gen_requests * t; with speculative decoding some classes
+            # shift or become unreachable — acceptable, as above.
+            t = 1 + self._config.max_total_draft_tokens
+            gen_odd = 2 if (2 * t) % 16 else 3
+            mamba_warmup_shapes += [
+                # ctx %16==0, single gen token (==1 specialization).
+                (capped_num_tokens - 16 + t, 1, False, False, False),
+                # ctx %16!=0, single gen token.
+                (capped_num_tokens - 5 + t, 1, False, False, False),
+                # ctx %16==0, gen tokens %16!=0.
+                (capped_num_tokens - 16 + gen_odd * t, gen_odd, False, False, False),
+                # ctx %16!=0, gen tokens %16==0.
+                (capped_num_tokens - 21 + 16 * t, 16, False, False, False),
+                # ctx==1 chunk remainder x each gen-token class.
+                (1 + t, 1, False, False, False),
+                (1 + gen_odd * t, gen_odd, False, False, False),
+                (1 + 16 * t, 16, False, False, False),
+            ]
 
         autotuner_enabled = self._config.enable_autotuner
         cache_path = os.environ.get("TLLM_AUTOTUNER_CACHE_PATH", None)
@@ -1935,6 +1997,23 @@ class DecoderRunner(ScheduledModelRunner):
                         self._reset_moe_alltoall_state()
                         torch.cuda.empty_cache()
 
+        # The folded save-last prefill path (GDN) has Triton variants no warmup
+        # shape reaches (folds need a save-last snapshot inside the chunk); the
+        # first folded serving iteration compiled them in rank lockstep. One
+        # GDN layer's dummy-data warmup covers every layer (shared kernels).
+        if os.environ.get("TLLM_GDN_FOLD_KERNEL_WARMUP", "1") == "1":
+            # The layer's real state pools: FlashInfer's CuTe kernels are compiled
+            # per pool geometry (size and slot strides of a non-contiguous pool),
+            # so a dummy pool would compile variants serving never uses.
+            for module in self.model.modules():
+                warm = getattr(module, "warmup_fold_kernels", None)
+                if warm is None:
+                    continue
+                try:
+                    warm(kv_cache_manager)
+                except Exception as e:  # perf-only: fall back to lazy compilation
+                    logger.warning(f"GDN fold kernel warmup skipped: {type(e).__name__}: {e}")
+                break
         clear_memory_buffers()
         torch.cuda.empty_cache()
 
@@ -3457,6 +3536,15 @@ class DecoderRunner(ScheduledModelRunner):
                 context_prompt_lookahead.append(
                     _get_context_prompt_lookahead_token(request, end_compute)
                 )
+            # Tokens this request actually pushes through the model across
+            # its chunks; compared against prompt_len - cached_tokens it
+            # exposes prefill work that prefix reuse did not save.
+            request.py_ctx_computed_tokens = getattr(request, "py_ctx_computed_tokens", 0) + (
+                end_compute - begin_compute
+            )
+            if getattr(request, "py_ctx_num_chunks", 0) == 0:
+                request.py_ctx_first_begin = begin_compute
+            request.py_ctx_num_chunks = getattr(request, "py_ctx_num_chunks", 0) + 1
             # Fetch only the current chunk. get_tokens(0) marshals the whole
             # O(seq_len) VecTokens into a Python list of boxed ints; chunked
             # prefill re-enters this loop for every chunk of the same prompt, so
@@ -4749,40 +4837,12 @@ class DecoderRunner(ScheduledModelRunner):
         ced_enabled = uses_private_decoder_cache(
             getattr(self.model, "model", None), kv_cache_manager
         )
-        graph_requests = scheduled_requests
-        promoted_context_request_ids: frozenset[int] = frozenset()
-        # Non-linear tree input preparation expands runtime_draft_len to the
-        # total tree width after graph selection. Only linear-tree zero-draft
-        # iterations can therefore safely reuse a zero-draft graph.
-        can_promote_spec_decode = not enable_spec_decode or (
-            runtime_draft_len == 0
-            and self._config.spec_config is not None
-            and self._config.spec_config.is_linear_tree
+        graph_requests, promoted_context_request_ids = self.make_graph_batch(
+            scheduled_requests,
+            kv_cache_manager,
+            enable_spec_decode=enable_spec_decode,
+            runtime_draft_len=runtime_draft_len,
         )
-        # TODO: Generalize these conservative gates as actual-draft, beam, and
-        # context-parallel providers for decoder-only LLMs gain support for
-        # promoted final-context rows. Each relaxation must preserve whole-batch
-        # fallback on graph miss and prove parity with the provider's native
-        # q_len=1 path. Encoder-decoder and non-LLM engines remain out of scope.
-        if (
-            scheduled_requests.num_context_requests > 0
-            and scheduled_requests.attention_dp_phase is not RemoteTailPhase.CONTEXT
-            # A physically pruned context cache cannot become a decode
-            # batch, including single-token synthetic prefill warmup rows.
-            and getattr(kv_cache_manager, "context_swa_layer_limit", None) is None
-            and self.cuda_graph_runner.enabled
-            and can_promote_spec_decode
-            and not ced_enabled
-            and not self.use_beam_search
-            and self._context_graph_promotion_supported
-            # PLE owns recurrent n-gram and convolution state. Promoting a
-            # fresh final-context row would skip its cache-slot reset.
-            and not self._model_uses_ple_recurrent_state
-            and self.mapping.cp_size == 1
-        ):
-            graph_requests, promoted_context_request_ids = _make_single_token_context_graph_batch(
-                scheduled_requests, self._is_final_multimodal_context_decode_compatible
-            )
 
         with self.cuda_graph_runner.pad_batch(
             graph_requests, resource_manager, runtime_draft_len
@@ -5298,6 +5358,65 @@ class DecoderRunner(ScheduledModelRunner):
                 "graph on every rank; at least one rank missed its graph"
             )
         return gathered[:, 0].tolist()
+
+    def make_graph_batch(
+        self,
+        scheduled_requests: ScheduledRequests,
+        kv_cache_manager: Any,
+        *,
+        enable_spec_decode: bool,
+        runtime_draft_len: int,
+    ) -> tuple[ScheduledRequests, frozenset[int]]:
+        """The batch ``_forward_decoder`` hands to the CUDA-graph runner.
+
+        Final one-token context requests are promoted into a decode-shaped
+        graph candidate when the engine configuration allows it; otherwise the
+        scheduled batch is returned as is with no promoted ids. A pure
+        function of the batch and config-derived runner state, so the executor
+        can evaluate it right after scheduling (TLLM_ADP_PACKED_SYNC packs the
+        runner's attention-DP padding vector into its post-schedule exchange)
+        and obtain exactly the rows the forward would gather.
+        """
+        from tensorrt_llm._torch.pyexecutor.ced_replay import uses_private_decoder_cache
+
+        ced_enabled = uses_private_decoder_cache(
+            getattr(self.model, "model", None), kv_cache_manager
+        )
+        graph_requests = scheduled_requests
+        promoted_context_request_ids: frozenset[int] = frozenset()
+        # Non-linear tree input preparation expands runtime_draft_len to the
+        # total tree width after graph selection. Only linear-tree zero-draft
+        # iterations can therefore safely reuse a zero-draft graph.
+        can_promote_spec_decode = not enable_spec_decode or (
+            runtime_draft_len == 0
+            and self._config.spec_config is not None
+            and self._config.spec_config.is_linear_tree
+        )
+        # TODO: Generalize these conservative gates as actual-draft, beam, and
+        # context-parallel providers for decoder-only LLMs gain support for
+        # promoted final-context rows. Each relaxation must preserve whole-batch
+        # fallback on graph miss and prove parity with the provider's native
+        # q_len=1 path. Encoder-decoder and non-LLM engines remain out of scope.
+        if (
+            scheduled_requests.num_context_requests > 0
+            and scheduled_requests.attention_dp_phase is not RemoteTailPhase.CONTEXT
+            # A physically pruned context cache cannot become a decode
+            # batch, including single-token synthetic prefill warmup rows.
+            and getattr(kv_cache_manager, "context_swa_layer_limit", None) is None
+            and self.cuda_graph_runner.enabled
+            and can_promote_spec_decode
+            and not ced_enabled
+            and not self.use_beam_search
+            and self._context_graph_promotion_supported
+            # PLE owns recurrent n-gram and convolution state. Promoting a
+            # fresh final-context row would skip its cache-slot reset.
+            and not self._model_uses_ple_recurrent_state
+            and self.mapping.cp_size == 1
+        ):
+            graph_requests, promoted_context_request_ids = _make_single_token_context_graph_batch(
+                scheduled_requests, self._is_final_multimodal_context_decode_compatible
+            )
+        return graph_requests, promoted_context_request_ids
 
     def _get_attention_dp_execution_batch(
         self, scheduled_requests: ScheduledRequests

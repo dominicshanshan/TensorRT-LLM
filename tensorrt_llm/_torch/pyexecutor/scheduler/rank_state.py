@@ -77,6 +77,11 @@ class RankState:
     iter_stats: RankIterStatsPayload = field(default_factory=RankIterStatsPayload)
     num_context_requests: int = 0
     num_generation_requests: int = 0
+    num_pending_new_requests: int = 0
+    """Rank 0's snapshot of not-yet-fetched requests (request queue +
+    accumulated), piggybacked on the allgather so every rank can skip the
+    request-count probe broadcast (or the whole fetch) on the busy path.
+    Always 0 on non-zero ranks and when the fetch hint is disabled."""
 
     def copy_iter_stats_from(self, iter_stats_payload: RankIterStatsPayload | None) -> None:
         if iter_stats_payload is not None:
@@ -92,6 +97,7 @@ class RankState:
             *self.iter_stats.serialize(include_kv_cache_load),
             self.num_context_requests,
             self.num_generation_requests,
+            self.num_pending_new_requests,
         ]
 
     @classmethod
@@ -100,7 +106,8 @@ class RankState:
         values = list(data)
         prefix_field_count = 4
         rank_state_fields = fields(cls)[:prefix_field_count]
-        max_field_count = prefix_field_count + len(fields(RankIterStatsPayload)) + 2
+        full_stats_field_count = len(fields(RankIterStatsPayload))
+        max_field_count = prefix_field_count + full_stats_field_count + 3
         if not values:
             raise ValueError("RankState payload is missing required field rank")
         if len(values) > max_field_count:
@@ -116,9 +123,14 @@ class RankState:
             else:
                 raise ValueError(f"RankState payload is missing required field {field_info.name}")
         # The telemetry fields are optional on the wire; forward-work counters
-        # always follow the iteration payload. The full message length identifies
-        # whether telemetry was included in this allgather.
-        stats_field_count = len(fields(RankIterStatsPayload)) if len(values) >= 16 else 9
+        # and the pending-request hint always follow the iteration payload. The
+        # full message length identifies whether telemetry was included in this
+        # allgather (15/16 fields without it, 18/19 with it).
+        stats_field_count = (
+            full_stats_field_count
+            if len(values) >= prefix_field_count + full_stats_field_count + 2
+            else 9
+        )
         stats_end = prefix_field_count + stats_field_count
         return cls(
             rank=rank_values[0],
@@ -128,4 +140,5 @@ class RankState:
             iter_stats=RankIterStatsPayload.deserialize(values[prefix_field_count:stats_end]),
             num_context_requests=values[stats_end] if len(values) > stats_end else 0,
             num_generation_requests=values[stats_end + 1] if len(values) > stats_end + 1 else 0,
+            num_pending_new_requests=values[stats_end + 2] if len(values) > stats_end + 2 else 0,
         )
