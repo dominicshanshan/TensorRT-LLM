@@ -1862,10 +1862,7 @@ class DecoderRunner(ScheduledModelRunner):
         # count for some draft lengths — acceptable, since the spec-dec
         # target-verify kernel variants are not covered here anyway.
         # Set TLLM_GDN_PREFILL_FAMILY_WARMUP=0 to disable.
-        if (
-            os.environ.get("TLLM_GDN_PREFILL_FAMILY_WARMUP", "1") == "1"
-            and capped_num_tokens >= 32
-        ):
+        if os.environ.get("TLLM_GDN_PREFILL_FAMILY_WARMUP", "1") == "1" and capped_num_tokens >= 32:
             mamba_warmup_shapes += [
                 # Prefill %16!=0 family, HAS_DECODE=False.
                 (capped_num_tokens - 4, 0, False, False, False),
