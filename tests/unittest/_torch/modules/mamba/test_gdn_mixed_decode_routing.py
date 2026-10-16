@@ -38,7 +38,8 @@ def test_mixed_scan_prefill_layout_plain_and_folded():
 @pytest.mark.skipif(not _sm100(), reason="FlashInfer GDN prefill + decode kernels (SM100/SM103)")
 @pytest.mark.parametrize("ctx_lens,n_dec", [([37], 5), ([300, 64], 40), ([1000], 190)])
 def test_recurrent_decode_matches_one_token_scan(ctx_lens, n_dec):
-    """chunk scan over [ctx + one-token decode] == chunk scan over ctx + recurrent kernel over decode (same raw inputs)."""
+    """chunk scan over [ctx + one-token decode] == chunk scan over ctx + recurrent kernel over
+    decode (same raw inputs)."""
     from tensorrt_llm._torch.modules.fla.flashinfer_chunk import chunk_gated_delta_rule as fi_cgdr
     from tensorrt_llm._torch.modules.fla.fused_sigmoid_gating_recurrent import (
         fused_sigmoid_gating_delta_rule_update,
@@ -147,7 +148,8 @@ def test_recurrent_decode_matches_one_token_scan(ctx_lens, n_dec):
 @pytest.mark.skipif(not _sm100(), reason="FlashInfer GDN decode kernel (SM100/SM103)")
 @pytest.mark.parametrize("offset", [1, 2, 3, 5])
 def test_decode_kernel_accepts_misaligned_slot_slice(offset):
-    """A tail slice of the slot buffer (offset = number of context requests) must give the same result as an aligned copy."""
+    """A tail slice of the slot buffer (offset = number of context requests) must give the same
+    result as an aligned copy."""
     from tensorrt_llm._torch.modules.fla.fused_sigmoid_gating_recurrent import (
         fused_sigmoid_gating_delta_rule_update,
     )

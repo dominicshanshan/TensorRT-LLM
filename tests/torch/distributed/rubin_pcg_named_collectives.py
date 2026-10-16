@@ -20,7 +20,7 @@ import torch
 import torch.distributed as dist
 import torch.distributed._functional_collectives as funcol
 
-import tensorrt_llm  # Registers TensorRT-LLM custom operators.
+import tensorrt_llm  # noqa: F401  (registers TensorRT-LLM custom operators)
 from tensorrt_llm.functional import AllReduceFusionOp, AllReduceStrategy
 
 

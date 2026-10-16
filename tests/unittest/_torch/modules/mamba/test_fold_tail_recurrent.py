@@ -35,7 +35,8 @@ def _ready():
 
 
 def _fold(lens, tails, s1, s2, dev, width=3):
-    """Fake fold metadata: each request i covers packed rows [sum(lens[:i]), sum(lens[:i+1])), its tail = the last tails[i] rows."""
+    """Fake fold metadata: each request i covers packed rows [sum(lens[:i]), sum(lens[:i+1])),
+    its tail = the last tails[i] rows."""
     starts = [sum(lens[:i]) for i in range(len(lens))]
     ranges = [(starts[i] + lens[i] - tails[i], tails[i]) for i in range(len(lens))]
     rows = [r for start, n in ranges for r in range(start, start + n)]
@@ -228,7 +229,8 @@ def test_forward_core_recurrent_tail_matches_chunked_tail(monkeypatch, ctx_lens,
     )
     torch.testing.assert_close(ssm_got.float(), ssm_ref.float(), atol=1e-2, rtol=2e-2)
     torch.testing.assert_close(out_got, out_ref, atol=1e-2, rtol=2e-2)
-    # the recurrent tail differs from the chunked one by bf16 rounding only: far closer than either is to the initial slot
+    # the recurrent tail differs from the chunked one by bf16 rounding only: far closer than
+    # either is to the initial slot
     assert (ssm_got[s2].float() - ssm_ref[s2].float()).abs().max() < 0.1 * (
         ssm_ref[s2].float() - ssm0[s2].float()
     ).abs().max()

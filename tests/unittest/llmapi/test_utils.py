@@ -283,9 +283,11 @@ class DelayedAssert:
 
 
 def test_exclude_cpus_from_affinity():
-    """Worker CPU affinity minus the co-located service CPUs: only the
-    overlap is dropped, and never so many that fewer than the minimum
-    number of CPUs would remain."""
+    """Worker CPU affinity minus the co-located service CPUs.
+
+    Only the overlap is dropped, and never so many that fewer than the
+    minimum number of CPUs would remain.
+    """
     assert parse_cpu_list("132-175,308-351") == (set(range(132, 176))
                                                  | set(range(308, 352)))
     assert parse_cpu_list(" 3, 5-6 ") == {3, 5, 6}

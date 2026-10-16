@@ -403,7 +403,8 @@ class _GdnPrefillScratch:
     def tail_rows_packed(
         self, num_rows: int, q: torch.Tensor, v: torch.Tensor, g: torch.Tensor, beta: torch.Tensor
     ):
-        """The packed ``[rows, ...]`` views of the buffers ``tail_rows`` returned for the same arguments (call it first)."""
+        """The packed ``[rows, ...]`` views of the buffers ``tail_rows`` returned for the same
+        arguments (call it first)."""
         hq, dk = q.shape[2], q.shape[3]
         hv, dv = v.shape[2], v.shape[3]
         return self._views.get(
@@ -469,7 +470,8 @@ class _GdnPrefillScratch:
         device,
         beta_dtype: torch.dtype = torch.float32,
     ) -> Optional[_PackedPostConv]:
-        """The ``_PackedPostConv`` views of the buffers ``post_conv`` returned for the same arguments (call it first)."""
+        """The ``_PackedPostConv`` views of the buffers ``post_conv`` returned for the same
+        arguments (call it first)."""
         return self._views.get(
             (
                 "packed",

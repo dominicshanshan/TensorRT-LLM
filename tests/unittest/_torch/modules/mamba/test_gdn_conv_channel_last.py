@@ -168,7 +168,7 @@ def test_forward_core_channel_last_matches_channel_major(monkeypatch, ctx_lens, 
     torch.testing.assert_close(conv_cl.float(), conv_ref.float(), atol=2e-2, rtol=2e-2)
     torch.testing.assert_close(ssm_cl.float(), ssm_ref.float(), atol=2e-2, rtol=2e-2)
     if any(f is not None for f in folds):
-        s1, s2 = folds[0][1] and slots[0], folds[0][1]
+        s2 = folds[0][1]
         assert not torch.equal(conv_cl[s2], conv0[s2]) and not torch.equal(ssm_cl[s2], ssm0[s2]), (
             "terminal slot written"
         )
