@@ -51,8 +51,7 @@ def _make_stub_executor(rank=0, queued_items=None):
     stub.kv_cache_transceiver = None
     stub.async_transfer_manager = None
     stub.enable_attention_dp = False
-    stub._idle_kv_transfer_poll_timeout = (
-        lambda: PyExecutor._idle_kv_transfer_poll_timeout(stub))
+    stub._idle_kv_transfer_poll_timeout = lambda: PyExecutor._idle_kv_transfer_poll_timeout(stub)
     return stub
 
 
@@ -127,11 +126,9 @@ def test_pending_control_requests_block_fetch():
 
 
 def _with_tracked_transfers(stub, local_inflight, poll_interval_ms=5000):
-    stub.kv_cache_transceiver = SimpleNamespace(
-        kv_transfer_poll_interval_ms=poll_interval_ms)
+    stub.kv_cache_transceiver = SimpleNamespace(kv_transfer_poll_interval_ms=poll_interval_ms)
     stub.async_transfer_manager = Mock()
-    stub.async_transfer_manager.has_any_inflight_requests = Mock(
-        return_value=local_inflight)
+    stub.async_transfer_manager.has_any_inflight_requests = Mock(return_value=local_inflight)
     return stub
 
 
@@ -193,8 +190,7 @@ def test_idle_transfer_poll_is_tp_wide_under_attention_dp():
 
 
 def test_busy_path_ignores_tracked_transfers():
-    stub = _with_tracked_transfers(_make_stub_executor(queued_items=[Mock()]),
-                                   local_inflight=True)
+    stub = _with_tracked_transfers(_make_stub_executor(queued_items=[Mock()]), local_inflight=True)
     stub.enable_attention_dp = True
     stub.dist = Mock(rank=0, tp_size=8)
     waiting_queue = FCFSWaitingQueue()
@@ -208,8 +204,9 @@ def test_busy_path_ignores_tracked_transfers():
 
 
 def test_idle_poll_falls_back_to_one_second_without_configured_interval():
-    stub = _with_tracked_transfers(_make_stub_executor(), local_inflight=True,
-                                   poll_interval_ms=None)
+    stub = _with_tracked_transfers(
+        _make_stub_executor(), local_inflight=True, poll_interval_ms=None
+    )
     waiting_queue = FCFSWaitingQueue()
 
     _fetch(stub, waiting_queue, total_num_active_requests=0, new_requests_hint=None)

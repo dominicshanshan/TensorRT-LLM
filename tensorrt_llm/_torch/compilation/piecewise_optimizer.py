@@ -31,11 +31,13 @@ _MULTI_STREAM_MAX_TOKENS: Optional[int] = (int(
 def multi_stream_max_tokens() -> Optional[int]:
     return _MULTI_STREAM_MAX_TOKENS
 
+
 from ..utils import (get_model_extra_attrs,
                      get_per_request_prefill_cuda_graph_flag,
                      get_piecewise_cuda_graph_flag, make_weak_ref,
                      set_piecewise_running)
 from .multi_stream.auto_multi_stream import multi_stream_schedule
+
 # TLLM_PWCG_NVTX_PROBE=1 brackets every piecewise runner call in an NVTX range
 # (host-side attribution of the glue between graph launches in nsys traces).
 _PWCG_NVTX_PROBE = os.environ.get("TLLM_PWCG_NVTX_PROBE", "0") == "1"

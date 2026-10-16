@@ -68,6 +68,7 @@ from tensorrt_llm.runtime.kv_cache_manager_v2 import (LayerId, PageIndexMode,
 # diverge on the sharding rule (config_utils is import-cycle-free).
 from ..config_utils import mamba_effective_tp_size
 
+
 def _is_generation_only(request) -> bool:
     """LlmRequest exposes this as a plain method on the Python wrapper (and as
     a property on the C++ binding); accept both."""
