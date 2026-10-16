@@ -608,10 +608,10 @@ class TestDefaultADPRouter:
         )
 
         disabled = state.serialize()
-        assert len(disabled) == 15
+        assert len(disabled) == 16
         assert RankState.deserialize(disabled).num_context_requests == 2
         enabled = state.serialize(include_kv_cache_load=True)
-        assert len(enabled) == 18
+        assert len(enabled) == 19
         restored = RankState.deserialize(enabled)
         assert restored.iter_stats.kv_used_blocks == 4
         assert restored.num_context_requests == 2

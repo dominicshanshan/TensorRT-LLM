@@ -213,8 +213,10 @@ def _make_executor(group, rank, *, active_requests, coordinator=None, runner=Non
     coordinator.bind(ex)
     ex._disagg_coordinator = coordinator
     ex.model_engine = SimpleNamespace(
-        make_graph_batch=lambda batch: (batch, frozenset()), cuda_graph_runner=runner
+        make_graph_batch=lambda batch, resource_manager: (batch, frozenset()),
+        cuda_graph_runner=runner,
     )
+    ex.resource_manager = SimpleNamespace()
     return ex
 
 
@@ -483,8 +485,11 @@ def _gate_executor(monkeypatch, **overrides):
     ex.is_benchmark_disagg = False
     ex.drafter = None
     ex.enable_early_first_token_response = False
+    ex._kv_load_tracker = SimpleNamespace(enabled=False)
     ex.model_engine = SimpleNamespace(
-        is_spec_decode=False, make_graph_batch=lambda b: (b, frozenset())
+        is_spec_decode=False,
+        make_graph_batch=lambda b, resource_manager: (b, frozenset()),
+        _runner=SimpleNamespace(make_graph_batch=lambda *args, **kwargs: None),
     )
     ex.adp_router = DefaultADPRouter(ex.dist)
     for key, value in overrides.items():

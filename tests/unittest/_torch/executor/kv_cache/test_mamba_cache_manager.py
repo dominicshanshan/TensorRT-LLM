@@ -3867,6 +3867,7 @@ def _v2_kda_replay_stub(num_slots=4):
     channels, a committed window of 3), for the state-index setup that prepare_resources runs. Committing pending drafts
     is recorded instead of run (it needs the GPU kernels)."""
     mgr = object.__new__(MambaHybridCacheManagerV2)
+    mgr.max_batch_size = num_slots
     mgr.local_num_mamba_layers = 1
     mgr._use_kda_replay_update = True
     mgr._use_replay_state_update = False
