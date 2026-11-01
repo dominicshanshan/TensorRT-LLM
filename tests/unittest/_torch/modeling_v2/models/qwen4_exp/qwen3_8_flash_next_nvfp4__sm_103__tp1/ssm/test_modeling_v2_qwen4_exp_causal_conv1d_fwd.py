@@ -106,7 +106,7 @@ def test_certified_cells(cell, certifying) -> None:  # noqa: F811 — pytest res
 
 def _token_strided_args():
     """A fresh argument list whose `x` has token stride 2: the channel-major
-    kernel ignores that stride and answers silently wrong."""
+    kernel reads through its scalar path."""
     dim, tokens = 512, 64
     spec = dict(dim=dim, lengths=(tokens,), pool_slots=1, slots=(0,), initial=(True,))
     args = _build(spec, seed=15)
@@ -117,14 +117,13 @@ def _token_strided_args():
     return args
 
 
-def test_guard_refuses_what_the_op_answers_silently_wrong() -> None:
-    """First the hazard, unguarded: the op returns without raising and its
-    answer misses the reference. Then the guard refuses the same call."""
+def test_guard_refuses_token_strided_input() -> None:
+    """The channel-major kernel's vector path needs a unit token stride and its
+    scalar path reads strided tokens, but the guard still refuses the layout:
+    the op's contract is unit stride on the token axis."""
     ref = op.reference(*_token_strided_args())
     unguarded = _token_strided_args()  # strided views must not be cloned dense
-    returned = op(*unguarded)
-    with pytest.raises(AssertionError):
-        _compare((returned, unguarded[3]), ref)
+    _compare((op(*unguarded), unguarded[3]), ref)
 
     with pytest.raises(AssertionError):
         with validating(op):
