@@ -52,7 +52,11 @@ from .impl_contract import (
 from .impl_environment import collect_moe_environment
 from .impl_identity import MOE_IMPL_REGISTRY, MoEImplId, MoEImplQuery
 from .interface import MoE
-from .mega_moe import DeepgemmCudaW4a8Mxfp4Mxfp8Impl, MegaMoECuteDsl
+from .mega_moe import (
+    DeepgemmCudaW4a8Mxfp4Mxfp8Impl,
+    TrtllmCutedslMegaMoeBf16Impl,
+    TrtllmCutedslMegaMoeNvfp4Impl,
+)
 from .moe_load_balancer import get_moe_load_balancer
 from .trtllm_gen import (
     FlashinferTrtllmGenBf16Impl,
@@ -95,7 +99,9 @@ MoEImplClass = type[MoE] | type[MoEImplBase] | type[VanillaMoE]
 IMPL_PRIORITY: Tuple[MoEImplClass, ...] = (
     CuteDslB12xFusedMoE,  # SM120/121 NVFP4 decode only -- narrowest, so first
     DeepgemmCudaW4a8Mxfp4Mxfp8Impl,  # ahead of plain CuteDSL / DeepGEMM: better perf when eligible
-    MegaMoECuteDsl,
+    # The two MegaMoE CuteDSL leaves publish disjoint ``quant`` segments, so their order is free.
+    TrtllmCutedslMegaMoeNvfp4Impl,
+    TrtllmCutedslMegaMoeBf16Impl,
     CuteDslFusedMoE,
     # The TRTLLM-Gen leaves. FlashInfer sits ahead of the native leaf
     # for the same format because the opt-in flag is what selects it: with the
@@ -153,7 +159,8 @@ BACKEND_FAMILY: Dict[str, FrozenSet[MoEImplClass]] = {
     ),
     "TRITON": frozenset({TritonFusedMoE}),
     "MEGAMOE_DEEPGEMM": frozenset({DeepgemmCudaW4a8Mxfp4Mxfp8Impl}),
-    "MEGAMOE_CUTEDSL": frozenset({MegaMoECuteDsl}),
+    # The quant picks the leaf: NVFP4, or unquantized BF16 on SM100/SM103.
+    "MEGAMOE_CUTEDSL": frozenset({TrtllmCutedslMegaMoeNvfp4Impl, TrtllmCutedslMegaMoeBf16Impl}),
 }
 
 # Catch table drift at import time.

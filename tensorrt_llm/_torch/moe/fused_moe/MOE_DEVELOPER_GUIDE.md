@@ -65,7 +65,7 @@ Each backend declares one of two scheduler kinds via the `scheduler_kind` class 
 | Kind | Scheduler class | Used by | Cross-rank EP exchange |
 |------|-----------------|---------|------------------------|
 | `EXTERNAL_COMM` | `ExternalCommMoEScheduler` | Cutlass, DeepGemm, CuteDSL, DenseGEMM, TRTLLMGen | Host issues `Communication.dispatch` / `.combine` outside the MoE kernel; supports per-chunk EPLB hooks and multi-stream chunk overlap |
-| `FUSED_COMM` | `FusedCommMoEScheduler` | DeepgemmCudaW4a8Mxfp4Mxfp8Impl, MegaMoECuteDsl | Comm is fused into the backend kernel via SymmBuffer / NVSHMEM-equivalent peer-pointer mapping; no host comm; lockstep chunk launches; EPLB stats AllReduced internally |
+| `FUSED_COMM` | `FusedCommMoEScheduler` | DeepgemmCudaW4a8Mxfp4Mxfp8Impl, TrtllmCutedslMegaMoeNvfp4Impl, TrtllmCutedslMegaMoeBf16Impl | Comm is fused into the backend kernel via SymmBuffer / NVSHMEM-equivalent peer-pointer mapping; no host comm; lockstep chunk launches; EPLB stats AllReduced internally |
 
 The two paths have *deliberately opposite* invariants (`use_dp_padding` honored vs ignored, ADP padding kept vs stripped, empty-chunk substituted vs zero-token kernel launch, multi-stream overlap allowed vs forbidden). See `moe_scheduler.py` class docstrings and `MOE_SCHEDULER_DESIGN.md` for the full contract.
 
@@ -139,7 +139,7 @@ EPLB hooks fire only at the first/last chunk of the first/last `repeat_idx`. Mul
 
 No external `Communication.dispatch` / `.combine`. Zero-token chunks still launch the kernel so peer EP ranks can cross the in-kernel NVLink barrier.
 
-`run_moe` may return a view of a persistent workspace that later MoE launches rewrite. The MegaMoE CuteDSL leaf returns rows of its adaptive bucket's combine region, which at EP > 1 every layer with the same layout shares and a zero-token launch may rewrite whole. So `_run_chunks` copies every chunk's output except the last before the next chunk launches, and `forward` concatenates the chunks after the last launch. The copy needs no event or host sync: local writers queue behind it on the stream, and peers write the region only for tokens this rank has published, which each launch does in its first kernel, a non-PDL token-comm kernel that starts after the copy. The only chunk of a single-chunk forward is not copied, so the caller must consume the output before the next MoE launch.
+`run_moe` may return a view of a persistent workspace that later MoE launches rewrite. The MegaMoE CuteDSL leaves return rows of their adaptive bucket's combine region, which at EP > 1 every layer with the same layout shares and a zero-token launch may rewrite whole. So `_run_chunks` copies every chunk's output except the last before the next chunk launches, and `forward` concatenates the chunks after the last launch. The copy needs no event or host sync: local writers queue behind it on the stream, and peers write the region only for tokens this rank has published, which each launch does in its first kernel, a non-PDL token-comm kernel that starts after the copy. The only chunk of a single-chunk forward is not copied, so the caller must consume the output before the next MoE launch.
 
 ### Core Design Principles
 
@@ -206,7 +206,7 @@ Still on old path (standalone, with embedded communication):
 | `fused_moe_cute_dsl.py` | `CuteDslFusedMoE` | SM100/SM103/SM107 | High throughput NVFP4, generally faster than Cutlass; BF16 on SM107; MXFP8 (W8A8 e4m3 + UE8M0 1x32) on SM107 and on SM100/SM103 via the fused FC1+SwiGLU+requant+FC2+finalize CuTe DSL kernel (`cute_dsl_kernels/rubin/moe/rubin_contiguous_grouped_blockscaled_gemm_fused_fc12.py` on Rubin, its port `cute_dsl_kernels/blackwell/moe/blackwell_contiguous_grouped_blockscaled_gemm_fused_fc12.py` on Blackwell; one launch per MoE layer, always finalizes in-kernel, SwiGLU only, requires `hidden_size % 512 == 0` and `intermediate_size_per_partition % 128 == 0`) | `EXTERNAL_COMM` |
 | `fused_moe_cute_dsl_b12x.py` | `CuteDslB12xFusedMoE` | SM120/SM121 | NVFP4 hybrid CUTLASS-prefill / FlashInfer NVFP4 MoE decode — best perf on RTX PRO 6000 (SM120) and DGX Spark (SM121); select via the `CUTEDSL` backend path (it heads that family's candidate list, so it wins on SM120/121 when flashinfer is present and yields to `CuteDslFusedMoE` otherwise); single-GPU-shaped topology only — it rejects both `ep_size > 1` and attention-DP, because it has no dispatch/combine kernel and has never been exercised behind a DP allgather | `EXTERNAL_COMM` |
 | `mega_moe/mega_moe_deepgemm.py` | `DeepgemmCudaW4a8Mxfp4Mxfp8Impl` (aliased as `MegaMoEDeepGemm`) | SM100/SM103 | W4A8_MXFP4_MXFP8 via DeepGEMM `fp8_fp4_mega_moe` fused dispatch+GEMM+act+GEMM+combine kernel; requires `hidden_size % 512 == 0` | `FUSED_COMM` |
-| `mega_moe/mega_moe_cute_dsl.py` | `MegaMoECuteDsl` | SM100/SM103/SM107 | NVFP4 fused dispatch+FC1+act+FC2+combine; internally selects Blackwell, Rubin generic or Rubin genphase kernels. Requires CUDA 13 Cutlass DSL and a symmetric-memory provider. Uses uniform activation constants and applies routing weights before FC2 quantization for DeepSeek-V4, after FC2 for other models. | `FUSED_COMM` |
+| `mega_moe/mega_moe_cute_dsl.py` | the abstract `MegaMoECuteDslBase` and its two leaves, `TrtllmCutedslMegaMoeNvfp4Impl` (`trtllm.cutedsl.mega_moe.nvfp4`, aliased as `MegaMoECuteDsl`) and `TrtllmCutedslMegaMoeBf16Impl` (`trtllm.cutedsl.mega_moe.none`) | SM100/SM103/SM107; BF16 SM100/SM103 only | NVFP4 or unquantized BF16 fused dispatch+FC1+act+FC2+combine; internally selects Blackwell, Rubin generic or Rubin genphase kernels. Requires CUDA 13 Cutlass DSL and a symmetric-memory provider. Uses uniform activation constants and applies routing weights before FC2 quantization for DeepSeek-V4, after FC2 for other models. Resolution is per layer, so a quantized checkpoint's unquantized MoE layers (e.g. the DeepSeek MTP layer, built with `QuantConfig(quant_algo=None)`) run on the BF16 leaf on SM100/SM103 and degrade to Cutlass on SM107, recorded in the `MoEResolutionReport` | `FUSED_COMM` |
 | `fused_moe_marlin.py` | `MarlinFusedMoE` | SM89-SM99 | W4A16 NVFP4 on Ada/Hopper (BF16 activations + FP4 weights, fused single-launch `marlin_nvfp4_moe_gemm` kernel); supports attention-DP + EP via external comm (scheduler precomputes routing; dispatch payload is plain BF16, no activation scales); non-NVFP4 layers (e.g. unquantized MTP draft layers) degrade to Cutlass in `resolve_moe_impl`, recorded in the layer's `MoEResolutionReport`; no dynamic EPLB | `EXTERNAL_COMM` |
 | `fused_moe_triton.py` | `TritonFusedMoE` | SM90 only | GPT-OSS on Hopper (requires `swiglu_gptoss_style=True`) | (legacy path) |
 | `fused_moe_vanilla.py` | `VanillaMoE` | All devices | Reference / debugging only | (legacy path) |
@@ -293,16 +293,26 @@ not `==`.
 | File | Role |
 |------|------|
 | `mega_moe_deepgemm.py` | `DeepgemmCudaW4a8Mxfp4Mxfp8Impl` backend (DeepGEMM `fp8_fp4_mega_moe` wrapper), aliased as `MegaMoEDeepGemm` |
-| `mega_moe_cute_dsl.py` | `MegaMoECuteDsl` backend (architecture-specific CuteDSL MegaMoE wrapper, NVFP4) |
+| `mega_moe_cute_dsl.py` | `MegaMoECuteDslBase` (the architecture-specific CuteDSL MegaMoE wrapper: buffers, symmetric memory, launch) and its leaves `TrtllmCutedslMegaMoeNvfp4Impl` (NVFP4, aliased as `MegaMoECuteDsl`) and `TrtllmCutedslMegaMoeBf16Impl` (unquantized BF16, SM100/SM103) |
 | `CHUNKING_DESIGN.md` | Chunking design for MegaMoE (sequential multi-chunk, in-kernel barrier semantics) |
 | `COMMUNICATION_COMPARISON.md` | Comparison of fused-comm SymmBuffer vs external comm strategies |
 | `KERNEL_INTERNALS.html` | Reference for the underlying DeepGEMM kernel layout |
 
-The exported CuteDSL kernel sources for `MegaMoECuteDsl` live under
+The exported CuteDSL kernel sources for both MegaMoE CuteDSL leaves live under
 `tensorrt_llm/_torch/cute_dsl_kernels/cutedsl_megamoe/`, preserving the upstream
 package structure and `KernelClass` entry points. The runner constructs
 `ProblemDesc` and `ImplDesc` and dispatches internally; the public backend
-remains `MEGAMOE_CUTEDSL`. Rubin's smaller token buckets use the genphase
+remains `MEGAMOE_CUTEDSL`, and the layer's quantization picks the leaf. The
+leaf's `_quant_kind` reaches the kernel as its `QuantKind`: `nvfp4`, or `bf16`,
+which dispatches bf16 tokens with no scale-factor leg, runs the `kind::f16`
+mainloop at MMA tile K 64, and has no SM107 kernel. The layer's `ActivationType`
+reaches it as the op's `activation_type`, which the op maps onto the kernel's
+`ExpertActivation` (`swiglu`, `situ`, or the non-gated `relu2`, which has a
+`bf16` kernel only) and checks against the FC1 extent and the activation
+constants before any kernel is built. The `bf16` kind, the `ExpertActivation`
+descriptor and the non-gated FC1 epilogue are in-tree additions to the upstream
+export, so a re-import of the package has to carry them forward. Rubin's
+smaller token buckets use the genphase
 kernel when supported, otherwise the generic kernel. During warmup, the
 default multi-rank path primes its adaptive buckets with zero-token launches.
 
@@ -552,10 +562,10 @@ Each backend's `can_implement(p, d)` classmethod declares what it supports. Sour
 
 | Quantization | Cutlass | TRTLLMGen | DeepGemm | DenseGEMM | CuteDSL | MegaMoE-DG | MegaMoE-CuteDSL | Triton | Marlin | Vanilla |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Unquantized (BF16/FP16) | Y (SM80+) | Y (SM100/103, BF16, needs FlashInfer)§ | N | N | Y (SM107, BF16, SwiGLU only)¶ | N | N | Y (SM90, BF16) | N | Y |
+| Unquantized (BF16/FP16) | Y (SM80+) | Y (SM100/103, BF16, needs FlashInfer)§ | N | N | Y (SM107, BF16, SwiGLU only)¶ | N | Y (SM100/103, BF16; SwiGLU, bias-free SwigluBias, SiTU and the non-gated Relu2, no expert bias; `top_k` <= 32; `hidden_size` and `intermediate_size` % 64 == 0) | Y (SM90, BF16) | N | Y |
 | FP8 QDQ | Y (SM89+) | N | N | N | N | N | N | Y (SM90) | N | Y |
 | FP8 Block Scales | Y (SM90, SM120) | Y (SM100/103) | Y (SM100/103) | N | N‡ | N | N | N | N | Y |
-| NVFP4 | Y (SM100/103/107/120/121) | Y (SM100/103) | N | Y (SM100/103) | Y (SM100/103/107/120/121)¶ | N | Y (SM100/103/107, cu13 cutlass-dsl + symmetric-memory provider; per-expert alpha/norm_const + SwiGLU clamp) | N | Y (SM89-SM99) | Y |
+| NVFP4 | Y (SM100/103/107/120/121) | Y (SM100/103) | N | Y (SM100/103) | Y (SM100/103/107/120/121)¶ | N | Y (SM100/103/107, cu13 cutlass-dsl + symmetric-memory provider; per-expert alpha/norm_const + SwiGLU clamp; gated activations only (SwiGLU, bias-free SwigluBias, SiTU); `top_k` <= 16) | N | Y (SM89-SM99) | Y |
 | W4A16 NVFP4 | Y (SM80+, dequant-on-the-fly) | N | N | N | Y (SM120/121 via `CuteDslB12xFusedMoE`, needs flashinfer) | N | N | N | Y (SM89-SM99, BF16) | Y |
 | W4A8 NVFP4 FP8 | N | Y (SM100/103) | N | N | N | N | N | N | N | N |
 | W4A16 MXFP4 | Y (SM90) | Y (SM100/103) | N | N | N | N | N | Y (SM90) | N | N |
@@ -738,13 +748,13 @@ expert bias, and the NVFP4 TMA-WS runner already applies `SwigluBiasAdaptor`.
 
 ### Scheduler / EPLB Constraints
 
-- `FUSED_COMM` backends (`DeepgemmCudaW4a8Mxfp4Mxfp8Impl`, `MegaMoECuteDsl`) **must not** layer host-side `Communication.dispatch` / `.combine` on top of the fused kernel — `ConfigurableMoE._create_comm_strategy_auto` returns `None` for them.
+- `FUSED_COMM` backends (`DeepgemmCudaW4a8Mxfp4Mxfp8Impl`, `TrtllmCutedslMegaMoeNvfp4Impl`, `TrtllmCutedslMegaMoeBf16Impl`) **must not** layer host-side `Communication.dispatch` / `.combine` on top of the fused kernel — `ConfigurableMoE._create_comm_strategy_auto` returns `None` for them.
 - `FusedCommMoEScheduler` calls `backend.quantize_input(...)` for every chunk including zero-token chunks (so peer ranks can cross the in-kernel NVLink barrier). Each fused-comm backend therefore MUST make `quantize_input` tolerate `x.shape[0] == 0` and return its own empty tensor layout; the scheduler does NOT synthesize backend-specific empty tensors.
 - Dynamic EPLB requires backend and quantization-method support. Backends gate
   wrapper-level constraints via `validate_configurable_moe`; `MegaMoEDeepGemm`
   supports dynamic EPLB by routing to slot IDs and migrating transformed DG
   weight tensors registered by its quantization method, with the constraint
-  `num_slots % ep_size == 0`. `MegaMoECuteDsl` declares `eplb_support_status = SUPPORTED`: its quantization method registers the four MegaMoE-format derived params (`mega_fc{1,2}_weight{,_sf}`) and the per-expert `fc1_norm_const` with the load balancer alongside the raw NVFP4 family, so per-slot migration stays byte-consistent.
+  `num_slots % ep_size == 0`. `MegaMoECuteDsl` declares `eplb_support_status = SUPPORTED`: its quantization method registers the four MegaMoE-format derived params (`mega_fc{1,2}_weight{,_sf}`) and the per-expert `fc1_norm_const` with the load balancer alongside the raw NVFP4 family, so per-slot migration stays byte-consistent. `TrtllmCutedslMegaMoeBf16Impl` declares it too: its kernel reads `w3_w1_weight` / `w2_weight` directly, and for gated activations `UnquantizedMegaMoECuteDslMethod` interleaves FC1 rows on the routed weights and the EPLB host staging alike, so migrated slots arrive in kernel layout. Relu2's FC1 rows are read as loaded, so its slots migrate as loaded.
 - `FUSED_COMM` backends use `ignore_allreduce=False` for EPLB statistic update because the fused kernel AllReduces routing stats internally.
 
 ## Canonical Examples

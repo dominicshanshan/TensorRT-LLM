@@ -50,8 +50,9 @@ from tensorrt_llm._torch.moe.fused_moe.impl_contract import (
     normalize_quant,
 )
 from tensorrt_llm._torch.moe.fused_moe.impl_environment import collect_moe_environment
+from tensorrt_llm._torch.moe.fused_moe.impl_identity import MOE_IMPL_REGISTRY, MoEImplId
 from tensorrt_llm._torch.moe.fused_moe.interface import MoE
-from tensorrt_llm._torch.moe.fused_moe.mega_moe import MegaMoECuteDsl, MegaMoEDeepGemm
+from tensorrt_llm._torch.moe.fused_moe.mega_moe import MegaMoEDeepGemm
 from tensorrt_llm._torch.moe.fused_moe.mega_moe.mega_moe_cute_dsl import (
     is_megamoe_cute_dsl_runtime_available,
 )
@@ -101,8 +102,9 @@ def find_backend_class(
 ) -> type[MoE] | None:
     """The MoE backend class, or ``None`` if TRTLLM-Gen has no leaf for the format.
 
-    ``TRTLLM`` is not one class but a set of leaves keyed by (provider, quant), so
-    it needs ``quant_algo``. It prefers the native leaf for that format and
+    ``TRTLLM`` and ``MEGAMOE_CUTEDSL`` are not one class each but sets of leaves
+    keyed by quant (and, for TRTLLM-Gen, provider), so each needs ``quant_algo``.
+    TRTLLM-Gen prefers the native leaf for that format and
     falls back to the FlashInfer sibling, which is what "the TRTLLM backend"
     has to mean for the unquantized format: bf16 has no native leaf, only
     ``FlashinferTrtllmGenBf16Impl``. For every other format the native leaf
@@ -115,6 +117,12 @@ def find_backend_class(
     """
     if backend_type is MoeBackendType.TRTLLM:
         return find_trtllm_gen_leaf(quant_algo)
+    if backend_type is MoeBackendType.MEGAMOE_CUTEDSL:
+        # One leaf per format (NVFP4, unquantized BF16), looked up the way the
+        # leaves' quant gates read the format, so the NVFP4_AWQ / NVFP4_ARC
+        # calibration aliases land on the NVFP4 leaf.
+        quant = normalize_quant(canonical_quant(quant_algo))
+        return MOE_IMPL_REGISTRY.lookup(MoEImplId("trtllm", "cutedsl", "mega_moe", quant))
 
     backend_class_map = {
         MoeBackendType.CUTLASS: CutlassFusedMoE,
@@ -122,7 +130,6 @@ def find_backend_class(
         MoeBackendType.DEEPGEMM: DeepGemmFusedMoE,
         MoeBackendType.DENSEGEMM: DenseGEMMFusedMoE,
         MoeBackendType.MEGAMOE_DEEPGEMM: MegaMoEDeepGemm,
-        MoeBackendType.MEGAMOE_CUTEDSL: MegaMoECuteDsl,
         MoeBackendType.CUTE_DSL_B12X: CuteDslB12xFusedMoE,
         MoeBackendType.MARLIN: MarlinFusedMoE,
     }
@@ -1049,8 +1056,9 @@ def should_skip_megamoe_cutedsl(
     """Check MegaMoECuteDsl-specific constraints for the generic MoE test matrix.
 
     Mirrors :func:`should_skip_megamoe_deepgemm` but applies to the
-    CuteDSL variant: NVFP4 + bfloat16 + 32-aligned hidden + 16-aligned
-    intermediate. Multi-rank coverage runs through the kernel's own
+    CuteDSL leaves: NVFP4 + bfloat16 + 32-aligned hidden + 16-aligned
+    intermediate, or unquantized BF16 + 64-aligned hidden and intermediate.
+    Multi-rank coverage runs through the kernel's own
     cuMem-based symmetric-memory provider (``MegaMoeSymmMemProvider``)
     rather than the host ``Communication.dispatch`` strategies, so the
     only sanctioned ``comm_method`` value here is the explicit
@@ -1084,8 +1092,8 @@ def should_skip_megamoe_cutedsl(
     if parallel_mode is not None and parallel_mode not in ("DEP", "TEP"):
         return f"MegaMoECuteDsl is EP-only; got parallel_mode={parallel_mode}"
 
-    if quant_algo != QuantAlgo.NVFP4:
-        return f"MegaMoECuteDsl only supports NVFP4 (got quant_algo={quant_algo})."
+    if quant_algo not in (QuantAlgo.NVFP4, None):
+        return f"MegaMoECuteDsl only supports NVFP4 and unquantized BF16 (got quant_algo={quant_algo})."
 
     if dtype is not None and dtype != torch.bfloat16:
         return f"MegaMoECuteDsl only supports bfloat16 activations (got dtype={dtype})."
@@ -1096,7 +1104,16 @@ def should_skip_megamoe_cutedsl(
     if parallel_mode == "TEP" and not swiglu_gptoss_style:
         return "MegaMoECuteDsl supports TEP only for bias-free MiniMax-style SwigluBias"
 
-    if model_config is not None:
+    if model_config is not None and quant_algo is None:
+        # The BF16 leaf keeps FC1 (K = hidden) and FC2 (K = intermediate) on
+        # whole 64-element MMA K tiles (TrtllmCutedslMegaMoeBf16Impl.can_implement).
+        for name, size in (
+            ("hidden_size", model_config.hidden_size),
+            ("intermediate_size", model_config.intermediate_size),
+        ):
+            if size % 64 != 0:
+                return f"MegaMoECuteDsl BF16 requires {name} % 64 == 0; got {name}={size}"
+    elif model_config is not None:
         hidden_size = model_config.hidden_size
         intermediate_size = model_config.intermediate_size
         # ProblemDesc.__post_init__ in upstream mega_runner.py:312-339:
@@ -1637,10 +1654,11 @@ def should_skip_to_accelerate_ci(
         return None
 
     # --- Rule 0: Skip gated and unquantized (quant=None) for most backends ---
-    # Keep TRTLLM BF16 for FlashInfer and CuteDSL BF16 with locality domain for the
-    # dedicated locality domain backend matrix.
+    # Keep TRTLLM BF16 for FlashInfer, CuteDSL BF16 with locality domain for the
+    # dedicated locality domain backend matrix, and the MegaMoE CuteDSL BF16 leaf,
+    # which is its own kernel path rather than a format of a shared one.
     keeps_unquantized_bf16_coverage = dtype == torch.bfloat16 and (
-        backend_type == MoeBackendType.TRTLLM
+        backend_type in (MoeBackendType.TRTLLM, MoeBackendType.MEGAMOE_CUTEDSL)
         or (backend_type == MoeBackendType.CUTEDSL and enable_locality_domains)
     )
     if (
