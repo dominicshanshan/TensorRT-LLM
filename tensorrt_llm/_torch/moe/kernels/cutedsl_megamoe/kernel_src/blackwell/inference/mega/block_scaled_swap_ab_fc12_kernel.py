@@ -13,6 +13,7 @@ from cutlass.cute.nvgpu import OperandMajorMode
 from cutlass.cutlass_dsl import Boolean
 from cutlass.pipeline import pipeline_init_arrive, pipeline_init_wait
 
+from .....activation_def import ExpertActivation
 from .....api import ImplDesc, KernelClass, OptionalRequirement, ProblemDesc, StaticOrRuntimeIntegerType
 from .....helpers.cute_py_helpers import Tcgen05MmaInstruction, make_tcgen05_tmem_plan, tcgen05_block_scaled_acc_dtype
 from .....helpers.device_workspace import DeviceWorkspace
@@ -84,6 +85,16 @@ class BlockScaledSwapAbFc12Kernel(KernelClass):
         self.intermediate_gateup_size = problem_desc["intermediate_gateup_size"]
         self.hidden_size = problem_desc["hidden_size"]
         self.quant_kind = QuantKind(problem_desc["quant_kind"])
+        if not self.quant_kind.is_block_scaled:
+            raise NotImplementedError(
+                f"The Lean FC12 Kernel supports block-scaled quant kinds only, got {self.quant_kind}; "
+                "the unquantized bf16 kind runs in BlockScaledSwapAbMegaMoeKernel."
+            )
+        expert_activation = ExpertActivation.from_problem_desc(problem_desc)
+        if not expert_activation.is_gated:
+            raise NotImplementedError(
+                f"The Lean FC12 Kernel supports gated activations only, got {expert_activation}."
+            )
         self.a_dtype = self.quant_kind.weight_dtype
         self.b_dtype = self.quant_kind.activation_dtype
         self.sf_dtype = self.quant_kind.sf_dtype
