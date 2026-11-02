@@ -907,6 +907,16 @@ class FusedCommMoEScheduler(MoEScheduler):
        so peers can cross the in-kernel NVLink barrier.
     8. No external Communication.dispatch / Communication.combine.
     9. No multi-stream chunk overlap.
+    10. Copy every chunk's output except the last before the next chunk
+        launches: a backend may return a view of a persistent workspace that
+        later MoE launches rewrite. MegaMoE-CuteDSL returns rows of its
+        bucket's combine region, which at EP > 1 every layer with the same
+        layout shares and a zero-token launch may rewrite whole. A copy on the
+        current stream suffices there: local writers queue behind it, and
+        peers write the region only for tokens this rank has published, which
+        each launch does in its first kernel, a non-PDL token-comm kernel that
+        starts after the copy. The only chunk of a single-chunk forward is not
+        copied, so callers must consume the output before the next MoE launch.
 
     ``repeat_idx`` advancement is done by ``ConfigurableMoE.forward_impl``
     after this scheduler returns. The scheduler must not rotate
@@ -1082,6 +1092,9 @@ class FusedCommMoEScheduler(MoEScheduler):
         ``real_local == 0`` (this rank has no tokens but peers do): class
         invariant 7 says launch every chunk on every EP rank so the in-kernel
         NVLink barrier (SymmBuffer collective) can synchronize.
+
+        Every chunk's output but the last is copied before the next chunk
+        launches (class invariant 10).
         """
         moe = self.moe
         outputs: List[torch.Tensor] = []
@@ -1115,6 +1128,9 @@ class FusedCommMoEScheduler(MoEScheduler):
                 is_last_call=is_last_call,
                 input_ids=input_ids_chunk,
             )
+            if idx_chunk < num_chunks - 1:
+                # Class invariant 10: a later launch may rewrite these rows.
+                out_chunk = out_chunk.clone()
             outputs.append(out_chunk)
         return outputs
 
