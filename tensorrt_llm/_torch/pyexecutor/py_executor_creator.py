@@ -1306,6 +1306,11 @@ def _create_py_executor(
             virtual_memory_pools=vm_pools if not estimating_kv_cache else None,
             execution_stream=execution_stream,
             max_num_sequences=max_num_seq_slots,
+            # The estimation executor never transfers KV, and its KV pools are torn down after the
+            # estimation. Registering them with the transfer agent can leave their device memory
+            # pinned after deregistration, and the final KV cache allocation then runs out of
+            # memory. The serving executor (rebind below) registers its own pools.
+            register_kv_cache_with_transceiver=not estimating_kv_cache,
         )
 
         # Originally, peft_cache_config might be mutated inside
