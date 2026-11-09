@@ -278,6 +278,7 @@ def _run_create_py_executor(
     ctx_chunk_configs: list | None = None,
     kv_cache_creator_cls: type[_DummyKvCacheCreator] = _DummyKvCacheCreator,
     is_mla_model: bool = True,
+    transceiver_kv_registrations: list | None = None,
 ) -> tuple[bool, bool, bool]:
     """Execute create_py_executor with mocked dependencies and return MLA runtime flags.
 
@@ -299,6 +300,8 @@ def _run_create_py_executor(
         ctx_chunk_configs: Optional list that receives the executor chunk config.
         kv_cache_creator_cls: Mock cache creator, including optional capacity estimation.
         is_mla_model: Whether the model uses MLA.
+        transceiver_kv_registrations: Optional list that receives, per executor or resource
+            build, whether its transceiver registers the KV cache pools.
 
     Returns:
         Tuple of (kv_cache_reuse_flag, runtime_cache_reuse_flag,
@@ -373,6 +376,10 @@ def _run_create_py_executor(
     def _create_py_executor_instance(**kwargs):
         if ctx_chunk_configs is not None:
             ctx_chunk_configs.append(kwargs["ctx_chunk_config"])
+        if transceiver_kv_registrations is not None:
+            transceiver_kv_registrations.append(
+                ("instance", kwargs.get("register_kv_cache_with_transceiver", True))
+            )
         executor = _DummyPyExecutor(
             resources=kwargs["resources"],
             model_engine=kwargs["model_engine"],
@@ -385,6 +392,10 @@ def _run_create_py_executor(
     def _create_py_executor_resources(**kwargs):
         if ctx_chunk_configs is not None:
             ctx_chunk_configs.append(kwargs["ctx_chunk_config"])
+        if transceiver_kv_registrations is not None:
+            transceiver_kv_registrations.append(
+                ("resources", kwargs.get("register_kv_cache_with_transceiver", True))
+            )
         return _DummyResourceManager(kwargs["resources"])
 
     monkeypatch.setattr(
@@ -849,6 +860,38 @@ def test_startup_allocation_phases(monkeypatch, estimate):
         assert allocation_phases == ["final_kv_cache_allocation", "final_executor_creation"]
     assert phases[-1] == "executor_start_worker"
     assert timers[0].depth == 0
+
+
+@pytest.mark.parametrize("estimate", [False, True])
+def test_estimation_executor_does_not_register_kv_cache_with_transceiver(monkeypatch, estimate):
+    """The estimation executor's KV pools are torn down after profiling; registering them with the
+    transfer agent can leave their device memory pinned, so the final KV cache allocation runs out
+    of memory. Only the serving executor's resources register their KV pools."""
+
+    class EstimatingCacheCreator(_DummyKvCacheCreator):
+        def try_prepare_estimation(self):
+            return estimate
+
+        def configure_kv_cache_capacity(self, executor):
+            pass
+
+        def teardown_managers(self, resources):
+            resources.pop(ResourceManagerType.KV_CACHE_MANAGER)
+
+    registrations = []
+    _run_create_py_executor(
+        monkeypatch,
+        sm_version=100,
+        kv_cache_quant_algo=QuantAlgo.NO_QUANT,
+        kv_cache_creator_cls=EstimatingCacheCreator,
+        transceiver_kv_registrations=registrations,
+    )
+
+    if estimate:
+        # Estimation executor without registration, then the serving resources with it.
+        assert registrations == [("instance", False), ("resources", True)]
+    else:
+        assert registrations == [("instance", True)]
 
 
 @pytest.mark.parametrize("failure_stage", ["profiling", "allocation", "rebind"])
